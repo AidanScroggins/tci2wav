@@ -161,7 +161,63 @@ test('exportWaves naming/grading/MAP', async () => {
   assert.ok(r.mapText.includes(r.files[0].name));
 });
 
-// stereo solve returns tails (heads X) on crafted interleaved stream
+// Trigger Instrument Editor variant: header + gap-chained V1 waves
+test('parseEditor round-trip', () => {
+  const mkWave = (vals, k) => {
+    let bits = '';
+    for (let s = 0; s < vals.length; s += 201) {
+      bits += k8(k);
+      for (const v of vals.slice(s, s + 201)) {
+        const t = v < 0 ? v + (1 << k) : v; // two's complement
+        bits += t.toString(2).padStart(k, '0');
+      }
+    }
+    return { bits, comp: bits.length, fr: vals.length + 1 };
+  };
+  const v1 = [], v2 = [];
+  for (let i = 0; i < 402; i++) v1.push((i % 201) - 100);
+  for (let i = 0; i < 300; i++) v2.push(i % 2 ? 7 : -7);
+  const w1 = mkWave(v1, 8), w2 = mkWave(v2, 4);
+  const parts = [];
+  const head = new Uint8Array(128);
+  new TextEncoder().encodeInto('TRIGGER ', head.subarray(0, 8));
+  new TextEncoder().encodeInto('COMPRESSED INSTRUMENT', head.subarray(8, 64));
+  new DataView(head.buffer).setUint32(64, 1, true);
+  new DataView(head.buffer).setUint32(68, 2, true);
+  parts.push(head);
+  const layouts = [];
+  for (const w of [w1, w2]) {
+    const nb = Math.ceil(w.comp / 8);
+    const blob = bitsToBytes(w.bits.padEnd(nb * 8, '0'));
+    const rec = new Uint8Array(9 + nb);
+    rec[0] = 0x01;
+    new DataView(rec.buffer).setUint32(1, w.comp, true);
+    new DataView(rec.buffer).setUint32(5, w.fr, true);
+    rec.set(blob, 9);
+    layouts.push({ rec, span: 9 + nb });
+  }
+  parts.push(layouts[0].rec);
+  const gap = new Uint8Array(8);
+  gap[0] = 0x05;
+  new DataView(gap.buffer).setUint32(4, layouts[0].span, true);
+  parts.push(gap, layouts[1].rec);
+  const foot = new Uint8Array([0x06, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3]);
+  parts.push(foot);
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  const waves = D.parseEditor(out);
+  assert.ok(waves && waves.length === 2);
+  assert.deepEqual(Array.from(waves[0].v1), v1);
+  assert.deepEqual(Array.from(waves[1].v1), v2);
+  // full export path: naming + grades
+  const r = E.exportWaves(
+    waves.map((w, i) => ({ comp: 0, frames: w.v1.length + 1, stereo: '0-ed', blob: new Uint8Array(0), v1: w.v1 })), 'Ed', 'T1');
+  assert.equal(r.files.length, 2);
+  assert.ok(r.files[0].name.startsWith('Ed_T1_V'));
+});
 test('stereo tails deinterleave', () => {
   // 2 x 201-blocks k=4 with distinct streams; even/odd blocks differ
   let bits = '';

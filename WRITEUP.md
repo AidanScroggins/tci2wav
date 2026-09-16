@@ -35,6 +35,20 @@ oracle TCIs and holds exactly: `[ver=01][compbits u32][frames u32]` then
 total, exact `compbits`. Proven on 8 oracles (dc_pos/neg, counter,
 ramp441, ramp_oracle, 120hz, block8, diag8).
 
+## 1b. Trigger Instrument Editor variant
+
+Files written by Slate's Trigger Instrument Editor share the `TRIGGER `
+magic but are a different container: tag `COMPRESSED INSTRUMENT` at
+offset 8, header u32s `[1, 8, 4, ...]` at 64, no zlib/`VC2!` footer.
+Layout: 128-byte file header (magic + name + two u32 rows, incl. 44100),
+then waves chained by 8-byte gap records `[05][prev_wave_span_bytes LE]`
+terminated by `[06][0]` + a small u32/float params table to EOF. Each
+wave is plain V1 (`[01][comp LE][frames LE]`, two's-complement
+residuals) and must consume `comp` bits with `frames-1` samples exactly
+— proven bit-exact on a user-built 4-wave file (88,200/44,100/88,200/
+44,100 frames). The app detects V2 → V1 → Editor in order; Editor waves
+export grade A like V1 singles.
+
 ## 2. The two things that matter
 
 **Sign-magnitude everywhere.** Every integer sample — raw head samples

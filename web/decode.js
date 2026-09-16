@@ -105,6 +105,59 @@
     }
   }
 
+  // Trigger Instrument Editor variant ("COMPRESSED INSTRUMENT" tag):
+  // 128-byte file header, then waves chained by 8-byte gap records
+  // [05][prev_wave_span_bytes LE] ... [06][0] + params footer to EOF.
+  // Each wave: [01][comp u32 LE][frames u32 LE][V1 blocks, two's complement].
+  function parseEditor(u8) {
+    if (u8.length < 128) return null;
+    if (!(u8[0] === 0x54 && u8[1] === 0x52 && u8[2] === 0x49 && u8[3] === 0x47 &&
+          u8[4] === 0x47 && u8[5] === 0x45 && u8[6] === 0x52 && u8[7] === 0x20)) return null;
+    let tag = '';
+    for (let i = 8; i < 64 && u8[i]; i++) tag += String.fromCharCode(u8[i]);
+    if (tag.indexOf('COMPRESSED') !== 0) return null;
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const bit = (base, p) => (u8[base + (p >> 3)] >> (7 - (p & 7))) & 1;
+    const waves = [];
+    let pos = 128;
+    for (let w = 0; w < 256; w++) {
+      if (pos + 9 > u8.length || u8[pos] !== 0x01) break;
+      const comp = dv.getUint32(pos + 1, true);
+      const fr = dv.getUint32(pos + 5, true);
+      if (!(comp > 0 && fr > 1 && fr < 1e7)) break;
+      const base = pos + 9;
+      const blen = Math.ceil(comp / 8);
+      if (base + blen > u8.length) break;
+      let p = 0;
+      const out = [];
+      let ok = true;
+      while (out.length < fr - 1) {
+        if (p + 8 > comp) { ok = false; break; }
+        let k = 0;
+        for (let i = 0; i < 8; i++) k = (k << 1) | bit(base, p + i);
+        if (!(k >= 1 && k <= 24)) { ok = false; break; }
+        p += 8;
+        const n = Math.min(201, fr - 1 - out.length);
+        if (p + n * k > comp) { ok = false; break; }
+        for (let i = 0; i < n; i++) {
+          let v = 0;
+          for (let j = 0; j < k; j++) v = (v << 1) | bit(base, p + j);
+          p += k;
+          out.push(bit(base, p - k) ? v - (1 << k) : v);
+        }
+      }
+      if (!ok || p !== comp || out.length !== fr - 1) break;
+      const span = 9 + blen;
+      waves.push({ comp, frames: fr, stereo: '0-ed', v1: Float64Array.from(out) });
+      pos += span;
+      if (pos + 8 > u8.length) break;
+      const gt = u8[pos];
+      if (gt === 0x06) break; // footer: params table to EOF
+      if (gt !== 0x05) break;
+      pos += 8;
+    }
+    return waves.length ? waves : null;
+  }
   // Oracle-proven V1 single wave: [01][comp u32][frames u32] then
   // [k:8][201 x k-bit] two's-complement residuals. Tries BE then LE.
   function parseV1(u8) {
@@ -213,6 +266,6 @@
     return out;
   }
 
-  return { sm24, readSM, bitAt, byteAt, bitsOf, parseV2, parseV1,
+  return { sm24, readSM, bitAt, byteAt, bitsOf, parseV2, parseV1, parseEditor,
            decodeBlocks, decodeWave, applyVoiceRule };
 }));

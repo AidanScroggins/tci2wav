@@ -7,8 +7,9 @@ onmessage = async function (e) {
     const u8 = new Uint8Array(buffer);
     let waves = await TCIDecode.parseV2(u8);
     if (!waves) waves = TCIDecode.parseV1(u8);
+    if (!waves) waves = TCIDecode.parseEditor(u8);
     if (!waves) {
-      postMessage({ id, ok: false, error: 'unrecognized file (not V1 or V2 TCI)' });
+      postMessage({ id, ok: false, error: 'unrecognized file (not V1, V2, or Editor TCI)' });
       return;
     }
     const r = TCIExport.exportWaves(waves, family, mic);

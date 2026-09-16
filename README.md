@@ -24,7 +24,7 @@ shipped headless. See `WRITEUP.md` for the full reverse-engineering notes.
 
 ## Layout
 
-- `web/` — the browser app (GitHub Pages root): upload a mono V1/V2
+- `web/` — the browser app (GitHub Pages root): upload a mono V1/V2/Editor/Editor
   `.tci`, download a ZIP of velocity-named WAVs + MAP.txt. Pure
   client-side JavaScript, no server, no uploads.
 - `py/` — the reference Python toolkit (needs numpy): core decoder,
