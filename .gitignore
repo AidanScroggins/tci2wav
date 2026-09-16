@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Slate commercial IP — never commit instruments or renders
+*.tci
+*.wav
+*.aif
+*.aiff
+*.zip
+
+# Local export trees and OS noise
+TCI-Exports/
+node_modules/
+coverage/
+.DS_Store
