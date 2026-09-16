@@ -7,8 +7,7 @@ attack-peak, RR = round robin within equal-level groups).
 Output tree: <OUT>/<Category>/<Instrument>/<MIC>/<names>.wav + MAP.txt
 (velocity map: file <- wave index, peak, grade).
 
-Detection per file: V2 (zlib footer + VC2! XML) else V1 ([01][comp][frames]
-single wave, blocks consume exactly comp bits) else skipped.
+Detection per file: V2 (zlib footer + VC2! XML) else V1 ([01][comp][frames] single wave) else Editor (COMPRESSED INSTRUMENT tag, gap-chained V1 waves) else skipped.
 
 Mono waves: structural auto-parse from render_library.solve_wave
 (see WRITEUP.md): raw200 test, multi identity-chain prefixes,
@@ -86,6 +85,66 @@ def parse_v1(path):
             return [{'comp': comp, 'frames': fr, 'stereo': '0-x',
                       'v1': np.array(out, float)}]
     return None
+
+
+def parse_editor(path):
+    """Trigger Instrument Editor variant ("COMPRESSED INSTRUMENT" tag):
+    128-byte file header, then waves chained by 8-byte gap records
+    [05][prev_wave_span_bytes LE] ... [06][0] + params footer to EOF.
+    Each wave: [01][comp u32 LE][frames u32 LE][V1 two's-complement blocks].
+    Proven bit-exact on a user-built 4-wave file (all waves consume comp
+    exactly with frames-1 samples)."""
+    from tci_decode import bits_of
+    d = open(path, 'rb').read()
+    if len(d) < 128 or d[:8] != b'TRIGGER ':
+        return None
+    if not d[8:64].startswith(b'COMPRESSED'):
+        return None
+    waves = []
+    pos = 128
+    for _ in range(256):
+        if pos + 9 > len(d) or d[pos] != 0x01:
+            break
+        comp, fr = struct.unpack('<II', d[pos + 1:pos + 9])
+        if not 0 < comp and 1 < fr < 10 ** 7:
+            break
+        base = pos + 9
+        nbytes = (comp + 7) // 8
+        if base + nbytes > len(d):
+            break
+        bstr = ''.join(f'{b:08b}' for b in d[base:base + nbytes])[:comp]
+        p, out, ok = 0, [], True
+        while len(out) < fr - 1:
+            if p + 8 > comp:
+                ok = False
+                break
+            k = int(bstr[p:p + 8], 2)
+            if not 1 <= k <= 24:
+                ok = False
+                break
+            p += 8
+            n = min(201, fr - 1 - len(out))
+            if p + n * k > comp:
+                ok = False
+                break
+            for i in range(n):
+                ch = bstr[p:p + k]
+                p += k
+                v = int(ch, 2)
+                out.append(v - (1 << k) if ch[0] == '1' else v)
+        if not ok or p != comp or len(out) != fr - 1:
+            break
+        waves.append({'comp': comp, 'frames': fr, 'stereo': '0-ed',
+                      'v1': np.array(out, float)})
+        pos += 9 + nbytes
+        if pos + 8 > len(d):
+            break
+        if d[pos] == 0x06:
+            break
+        if d[pos] != 0x05:
+            break
+        pos += 8
+    return waves or None
 
 
 def solve_stereo(wblob, fr):
@@ -172,6 +231,8 @@ def export_tci(path, outdir, family, mic):
     waves = parse_v2(path)
     if waves is None:
         waves = parse_v1(path)
+    if waves is None:
+        waves = parse_editor(path)
         if waves is None:
             return [('?', 'X', 'unrecognized format')]
     os.makedirs(outdir, exist_ok=True)

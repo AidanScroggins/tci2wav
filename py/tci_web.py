@@ -1,4 +1,4 @@
-"""TCI web exporter: upload a mono .tci (V1 or V2), download velocity-named WAVs.
+"""TCI web exporter: upload a mono .tci (V1, V2, or Editor), download velocity-named WAVs.
 
 Runs on stdlib only (+ numpy, already required by the toolkit):
     python3 tci_web.py [port]      # default 8765 -> http://localhost:8765
@@ -56,7 +56,7 @@ font-weight:700;border-radius:4px;padding:1px 6px}
 #status{margin-top:12px;color:#555} #dl{margin-top:12px;display:none}
 code{background:#f4f4f4;padding:1px 5px;border-radius:4px}
 </style></head><body>
-<h1>TCI Exporter <small style="font-weight:400;color:#666">mono V1/V2 &rarr; velocity WAVs</small></h1>
+<h1>TCI Exporter <small style="font-weight:400;color:#666">mono V1/V2/Editor &rarr; velocity WAVs</small></h1>
 <div class="card">
 <label>TCI file (.tci)</label>
 <input type="file" id="file" accept=".tci">
@@ -142,8 +142,10 @@ def decode_upload(data, family, mic):
     waves = parse_v2_bytes(data)
     if waves is None:
         waves = parse_v1_bytes(data)
+    if waves is None:
+        waves = parse_editor_bytes(data)
         if waves is None:
-            return None, 'unrecognized file (not V1 or V2 TCI)'
+            return None, 'unrecognized file (not V1, V2, or Editor TCI)'
     items = []
     for i, wv in enumerate(waves):
         try:
@@ -272,6 +274,59 @@ def parse_v1_bytes(data):
             return [{'comp': comp, 'frames': fr, 'stereo': '0-x',
                       'v1': np.array(out, float)}]
     return None
+
+
+def parse_editor_bytes(data):
+    import struct
+    if len(data) < 128 or data[:8] != b'TRIGGER ':
+        return None
+    if not data[8:64].startswith(b'COMPRESSED'):
+        return None
+    waves = []
+    pos = 128
+    for _ in range(256):
+        if pos + 9 > len(data) or data[pos] != 0x01:
+            break
+        comp, fr = struct.unpack('<II', data[pos + 1:pos + 9])
+        if not 0 < comp and 1 < fr < 10 ** 7:
+            break
+        base = pos + 9
+        nbytes = (comp + 7) // 8
+        if base + nbytes > len(data):
+            break
+        bstr = ''.join(f'{b:08b}' for b in data[base:base + nbytes])[:comp]
+        p, out, ok = 0, [], True
+        while len(out) < fr - 1:
+            if p + 8 > comp:
+                ok = False
+                break
+            k = int(bstr[p:p + 8], 2)
+            if not 1 <= k <= 24:
+                ok = False
+                break
+            p += 8
+            n = min(201, fr - 1 - len(out))
+            if p + n * k > comp:
+                ok = False
+                break
+            for i in range(n):
+                ch = bstr[p:p + k]
+                p += k
+                v = int(ch, 2)
+                out.append(v - (1 << k) if ch[0] == '1' else v)
+        if not ok or p != comp or len(out) != fr - 1:
+            break
+        waves.append({'comp': comp, 'frames': fr, 'stereo': '0-ed',
+                      'v1': np.array(out, float)})
+        pos += 9 + nbytes
+        if pos + 8 > len(data):
+            break
+        if data[pos] == 0x06:
+            break
+        if data[pos] != 0x05:
+            break
+        pos += 8
+    return waves or None
 
 
 class Handler(BaseHTTPRequestHandler):
