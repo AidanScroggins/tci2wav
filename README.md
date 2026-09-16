@@ -1,5 +1,8 @@
 # tci2wav
 
+## Note from the author
+This app is 100% vibe-coded. I am not a programmer, just an audio enthusiast looking for a solution to my problem. Please feel free to suggest improvements, pull requests, or fork this. This project is a clean room style reverse engineering job made possible using the OpenCode Agent and Muse Spark 1.3.
+
 Decode Steven Slate Trigger 2 `.tci` sample files — V1 and V2, mono and
 stereo — in your browser or on the command line, and export
 velocity-named WAVs.
