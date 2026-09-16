@@ -29,7 +29,9 @@ test('parseV1 BE round-trip', () => {
   const vals = [];
   for (let v = -100; v <= 100; v++) vals.push(v);
   let bits = k8(8);
-  for (const v of vals) bits += (v & 0xFF).toString(2).padStart(8, '0');
+  for (const v of vals) { // sign-magnitude: sign + 7-bit magnitude
+    bits += (v < 0 ? '1' : '0') + Math.abs(v).toString(2).padStart(7, '0');
+  }
   bits += k8(1) + '0'.repeat(201);
   const comp = bits.length, fr = 1 + 201 + 201;
   const nb = Math.ceil(comp / 8);
@@ -168,8 +170,8 @@ test('parseEditor round-trip', () => {
     for (let s = 0; s < vals.length; s += 201) {
       bits += k8(k);
       for (const v of vals.slice(s, s + 201)) {
-        const t = v < 0 ? v + (1 << k) : v; // two's complement
-        bits += t.toString(2).padStart(k, '0');
+        const m = Math.abs(v); // sign-magnitude
+        bits += (v < 0 && m !== 0 ? '1' : '0') + m.toString(2).padStart(k - 1, '0');
       }
     }
     return { bits, comp: bits.length, fr: vals.length + 1 };

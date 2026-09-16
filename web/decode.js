@@ -108,7 +108,7 @@
   // Trigger Instrument Editor variant ("COMPRESSED INSTRUMENT" tag):
   // 128-byte file header, then waves chained by 8-byte gap records
   // [05][prev_wave_span_bytes LE] ... [06][0] + params footer to EOF.
-  // Each wave: [01][comp u32 LE][frames u32 LE][V1 blocks, two's complement].
+  // Each wave: [01][comp u32 LE][frames u32 LE][V1 blocks, sign-magnitude].
   function parseEditor(u8) {
     if (u8.length < 128) return null;
     if (!(u8[0] === 0x54 && u8[1] === 0x52 && u8[2] === 0x49 && u8[3] === 0x47 &&
@@ -140,10 +140,14 @@
         const n = Math.min(201, fr - 1 - out.length);
         if (p + n * k > comp) { ok = false; break; }
         for (let i = 0; i < n; i++) {
-          let v = 0;
-          for (let j = 0; j < k; j++) v = (v << 1) | bit(base, p + j);
+          // sign-magnitude residuals (same as V2 tails; two's complement
+          // decodes real drums as full-scale distortion)
+          let mag = 0;
+          const sign = bit(base, p) ? -1 : 1;
+          for (let j = 1; j < k; j++) mag = (mag << 1) | bit(base, p + j);
           p += k;
-          out.push(bit(base, p - k) ? v - (1 << k) : v);
+          const v = sign < 0 && mag !== 0 ? -mag : (sign < 0 ? 0 : mag);
+          out.push(v);
         }
       }
       if (!ok || p !== comp || out.length !== fr - 1) break;
@@ -158,8 +162,9 @@
     }
     return waves.length ? waves : null;
   }
-  // Oracle-proven V1 single wave: [01][comp u32][frames u32] then
-  // [k:8][201 x k-bit] two's-complement residuals. Tries BE then LE.
+  // Oracle-shaped V1 single wave: [01][comp u32][frames u32] then
+  // [k:8][201 x k-bit] SIGN-MAGNITUDE residuals (two's complement
+  // decodes real drums as full-scale distortion). Tries BE then LE.
   function parseV1(u8) {
     if (!u8.length || u8[0] !== 0x01) return null;
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
@@ -186,10 +191,13 @@
         const n = Math.min(201, fr - 1 - out.length);
         if (pos + n * k > blen) { ok = false; break; }
         for (let i = 0; i < n; i++) {
-          let v = 0;
-          for (let j = 0; j < k; j++) v = (v << 1) | bit(pos + j);
+          // sign-magnitude (matches the V2 voice path; two's complement
+          // decodes real drums as full-scale distortion)
+          let mag = 0;
+          const sign = bit(pos) ? -1 : 1;
+          for (let j = 1; j < k; j++) mag = (mag << 1) | bit(pos + j);
           pos += k;
-          out.push(bit(pos - k) ? v - (1 << k) : v);
+          out.push(sign < 0 && mag !== 0 ? -mag : (sign < 0 ? 0 : mag));
         }
       }
       if (ok && pos === comp && out.length === fr - 1) {

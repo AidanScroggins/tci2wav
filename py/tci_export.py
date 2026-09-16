@@ -47,7 +47,7 @@ ATK_N = 5000
 
 def parse_v1(path):
     """Oracle-proven V1 single wave: [01][comp u32][frames u32] then
-    [k:8][201 x k-bit] residuals (two's complement sign-extended)."""
+    [k:8][201 x k-bit] residuals (sign-magnitude, like V2)."""
     d = open(path, 'rb').read()
     if not d or d[0] != 0x01:
         return None
@@ -79,8 +79,8 @@ def parse_v1(path):
             for i in range(n):
                 ch = bits[pos:pos + k]
                 pos += k
-                v = int(ch, 2)
-                out.append(v - (1 << k) if ch[0] == '1' else v)
+                m = int(ch[1:], 2) if k > 1 else 0
+                out.append(-m if ch[0] == '1' and m else m)
         if ok and pos == comp and len(out) == fr - 1:
             return [{'comp': comp, 'frames': fr, 'stereo': '0-x',
                       'v1': np.array(out, float)}]
@@ -91,7 +91,7 @@ def parse_editor(path):
     """Trigger Instrument Editor variant ("COMPRESSED INSTRUMENT" tag):
     128-byte file header, then waves chained by 8-byte gap records
     [05][prev_wave_span_bytes LE] ... [06][0] + params footer to EOF.
-    Each wave: [01][comp u32 LE][frames u32 LE][V1 two's-complement blocks].
+    Each wave: [01][comp u32 LE][frames u32 LE][V1 sign-magnitude blocks].
     Proven bit-exact on a user-built 4-wave file (all waves consume comp
     exactly with frames-1 samples)."""
     from tci_decode import bits_of
@@ -130,8 +130,8 @@ def parse_editor(path):
             for i in range(n):
                 ch = bstr[p:p + k]
                 p += k
-                v = int(ch, 2)
-                out.append(v - (1 << k) if ch[0] == '1' else v)
+                m = int(ch[1:], 2) if k > 1 else 0
+                out.append(-m if ch[0] == '1' and m else m)
         if not ok or p != comp or len(out) != fr - 1:
             break
         waves.append({'comp': comp, 'frames': fr, 'stereo': '0-ed',

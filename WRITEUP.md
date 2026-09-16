@@ -43,8 +43,10 @@ offset 8, header u32s `[1, 8, 4, ...]` at 64, no zlib/`VC2!` footer.
 Layout: 128-byte file header (magic + name + two u32 rows, incl. 44100),
 then waves chained by 8-byte gap records `[05][prev_wave_span_bytes LE]`
 terminated by `[06][0]` + a small u32/float params table to EOF. Each
-wave is plain V1 (`[01][comp LE][frames LE]`, two's-complement
-residuals) and must consume `comp` bits with `frames-1` samples exactly
+wave is plain V1 (`[01][comp LE][frames LE]`, sign-magnitude
+residuals — an early two's-complement reading was overturned by a real
+drum recording, which two's complement decodes as full-scale
+distortion) and must consume `comp` bits with `frames-1` samples exactly
 — proven bit-exact on a user-built 4-wave file (88,200/44,100/88,200/
 44,100 frames). The app detects V2 → V1 → Editor in order; Editor waves
 export grade A like V1 singles.

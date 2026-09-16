@@ -268,8 +268,8 @@ def parse_v1_bytes(data):
             for i in range(n):
                 ch = bits[pos:pos + k]
                 pos += k
-                v = int(ch, 2)
-                out.append(v - (1 << k) if ch[0] == '1' else v)
+                m = int(ch[1:], 2) if k > 1 else 0
+                out.append(-m if ch[0] == '1' and m else m)
         if ok and pos == comp and len(out) == fr - 1:
             return [{'comp': comp, 'frames': fr, 'stereo': '0-x',
                       'v1': np.array(out, float)}]
@@ -312,8 +312,8 @@ def parse_editor_bytes(data):
             for i in range(n):
                 ch = bstr[p:p + k]
                 p += k
-                v = int(ch, 2)
-                out.append(v - (1 << k) if ch[0] == '1' else v)
+                m = int(ch[1:], 2) if k > 1 else 0
+                out.append(-m if ch[0] == '1' and m else m)
         if not ok or p != comp or len(out) != fr - 1:
             break
         waves.append({'comp': comp, 'frames': fr, 'stereo': '0-ed',
