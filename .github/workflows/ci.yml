@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test web/tests/parity.test.js
+      - run: node --test web/tests/parity-local.mjs
+        env:
+          TCI_KICK: ''
+          TCI_SNARE: ''
+  guard-ip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fail if instruments or audio are staged
+        run: |
+          bad=$(git ls-files | grep -Ei '\.(tci|wav|aif|aiff|zip)$' || true)
+          if [ -n "$bad" ]; then echo "IP files in repo:"; echo "$bad"; exit 1; fi
+          echo "no instrument/audio files staged"
