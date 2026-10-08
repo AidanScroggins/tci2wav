@@ -19,17 +19,21 @@ Every export ships a `MAP.txt` mapping each file back to its wave index,
 parse, and grade.
 
 Grades: `A` exact+smooth, `B` close, `C` verify by ear, `X` skipped.
-Stereo heads use an unsolved table path and are listed as skipped, never
-shipped headless. See `WRITEUP.md` for the full reverse-engineering notes.
+
+Stereo waves (`NRG`/`SSDR`/`OH`) are exported as 2-channel WAVs: the tail is
+decoded exactly and the ~2 ms attack head comes from a table path that is not
+decoded yet, so those frames are left silent and flagged `B` in `MAP.txt`
+(`head:93fr silent`) rather than guessed or skipped. See `WRITEUP.md` for the
+full reverse-engineering notes.
 
 ## Layout
 
-- `web/` — the browser app (GitHub Pages root): upload a mono V1/V2/Editor/Editor
-  `.tci`, download a ZIP of velocity-named WAVs + MAP.txt. Pure
+- `web/` — the browser app (GitHub Pages root): upload a V1/V2/Editor `.tci`
+  (mono or stereo), download a ZIP of velocity-named WAVs + MAP.txt. Pure
   client-side JavaScript, no server, no uploads.
 - `py/` — the reference Python toolkit (needs numpy): core decoder,
-  structural solver, batch + unified exporters, and the original
-  local web app.
+  structural mono solver, stereo tail decoder, batch + unified exporters, and
+  the original local web app.
 - `WRITEUP.md` — container format, sign-magnitude bitstream, head
   families, solver method, verification results, open problems.
 

@@ -140,6 +140,25 @@ def apply_voice_rule(vec, frames):
     return v
 
 
+def export_stereo_wav(path, L, R):
+    """Write 24-bit 44.1kHz stereo WAV; both channels same length."""
+    import wave
+    import numpy as np
+    n = min(len(L), len(R))
+    pcm = np.zeros((n, 6), dtype=np.uint8)
+    for c, vec in enumerate((L, R)):
+        v = np.clip(np.asarray(vec[:n], dtype=float),
+                    -2 ** 23, 2 ** 23 - 1).astype(np.int32)
+        u = (v & ((1 << 24) - 1)).astype(np.uint32)
+        for b in range(3):
+            pcm[:, c * 3 + b] = ((u >> np.uint32(8 * b)) & np.uint32(255))
+    with wave.open(path, 'wb') as f:
+        f.setnchannels(2)
+        f.setsampwidth(3)
+        f.setframerate(44100)
+        f.writeframes(pcm.tobytes())
+
+
 def export_wav(path, vec):
     """Write mono 24-bit 44.1k WAV from int samples."""
     import wave

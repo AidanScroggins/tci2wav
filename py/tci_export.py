@@ -14,12 +14,13 @@ Mono waves: structural auto-parse from render_library.solve_wave
 single-block fits ranked by smoothness then known width byte then
 smallest side. Grades A/B/C/X.
 
-Stereo waves (stereo=1, samples = 2*frames): V1 201-block tail from the
-earliest long run, L/R = even/odd SAMPLES of the joint stream
-(ear-verified on SSDR; block-split and halves score ~0.1). Heads
-(~165 samples) use a non-V1 table path: a single-block structural
-attempt is made and smoothness-checked; unsolved waves are SKIPPED
-(grade X) rather than shipped headless.
+Stereo waves (stereo=1, samples = 2*frames): one joint stream of
+2*frames sign-magnitude samples, L/R = even/odd SAMPLES counted over the
+whole stream. From the tail start on it is a chain of V1 [k:8][201 x k-bit]
+blocks that consumes wd{i}comp1 exactly; the earliest chain that reaches the
+end wins. The first ~93-100 frames (head) come from a non-V1 table path that
+is not decoded, so those frames are left SILENT and reported rather than
+guessed: grade B (see stereo.py).
 
 Velocity: attack-peak (peak over first 5000 samples) ascending. Groups:
 adjacent levels with peak ratio < 1.12 share a velocity (round robins).
@@ -36,9 +37,10 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tci_decode import apply_voice_rule, decode_wave, export_wav
-from solve_wave import decode_span, run_scan, tail_count
-from render_library import CATS, KMAP, LIB, parse_v2, smooth_score, solve_wave
+from tci_decode import (apply_voice_rule, decode_wave, export_stereo_wav,
+                        export_wav)
+from render_library import CATS, LIB, parse_v2, solve_wave
+from stereo import decode_stereo
 
 OUT = f'{LIB}/TCI-Exports'
 RR_RATIO = 1.12
@@ -147,84 +149,21 @@ def parse_editor(path):
     return waves or None
 
 
-def solve_stereo(wblob, fr):
-    """Sample-interleaved stereo joint stream. Returns
-    (L, R, grade, note); heads attempted structurally, X if unsolved."""
-    from tci_decode import bits_of
-    bits = bits_of(bytes(wblob))
-    Ts = sorted(set(p for _, p in run_scan(bits, hi=200000, min_run=50)))
-    if not Ts:
-        return None, None, 'X', 'no tail run'
-    total = 2 * fr
-    best = None
-    for T in Ts[:6]:
-        tl, endp = tail_count(bits, T)
-        if endp < len(bits) - 16:
-            continue
-        for C in range(max(64, total - tl - 2), total - tl + 45):
-            for k in range(15, 25):
-                S = T - 8 - C * k
-                if S < 0 or S > 3000:
-                    continue
-                sc = smooth_score(decode_span(bits, S + 8, k, C), k)
-                if sc >= 0.15:
-                    continue
-                b = int(bits[S:S + 8], 2)
-                key = ((b == k) or (KMAP.get(b) == k), S)
-                if best is None or (not key[0], key[1]) < (not best[0], best[1]):
-                    best = (key[0], S, C, k, T, b, sc)
-    if best is None:
-        return None, None, 'X', 'head unsolved (table path)'
-    _bon, S, C, k, T, b, sc = best
-    joint = decode_span(bits, S + 8, k, C)
-    pos = T
-    rest = []
-    L = len(bits)
-    while pos + 8 <= L:
-        kk = int(bits[pos:pos + 8], 2)
-        if not 1 <= kk <= 24:
-            break
-        pos += 8
-        for i in range(201):
-            if pos + kk > L:
-                break
-            ch = bits[pos:pos + kk]
-            pos += kk
-            v = int(ch[1:], 2) if kk > 1 else 0
-            rest.append(-v if ch[0] == '1' else v)
-    full = np.concatenate([joint, np.array(rest, float)])
-    n = min(len(full) // 2, fr)
-    # Never above C: no ground truth exists for stereo heads; even smooth
-    # fits may be k=19-style ghosts. Ears decide.
-    grade = 'C'
-    return full[0:2 * n:2], full[1:2 * n:2], grade, \
-        f'stereo C={C} k={k} S={S} T={T} byte={b} sm={sc:.2f}'
+def decode_stereo_wave(wblob, comp, fr):
+    """Decode one stereo wave. Returns (L, R, grade, note); grade X when no
+    V1 tail chain explains the wave. The undecoded head frames stay silent."""
+    r = decode_stereo(wblob, comp, fr)
+    if r is None:
+        return None, None, 'X', 'no V1 tail chain'
+    note = f'stereo tail@bit{r["tailStart"]}/{r["tailSamples"]}sm'
+    note += (f' head:{r["headFrames"]}fr silent' if r['headFrames']
+             else ' head:none')
+    return r['L'], r['R'], 'B', note
 
 
 def attack_peak(vec):
     v = np.asarray(vec, float)[:ATK_N]
     return float(np.abs(v).max()) if len(v) else 0.0
-
-
-def export_stereo(path, L, R):
-    import wave
-    n = min(len(L), len(R))
-    iv = np.clip(np.asarray(L[:n], float), -2 ** 23, 2 ** 23 - 1).astype(np.int32)
-    iu = (iv & ((1 << 24) - 1)).astype(np.int32)
-    jv = np.clip(np.asarray(R[:n], float), -2 ** 23, 2 ** 23 - 1).astype(np.int32)
-    ju = (jv & ((1 << 24) - 1)).astype(np.int32)
-    pcm = np.zeros((n, 6), dtype=np.uint8)
-    pcm[:, 0] = iu & 255
-    pcm[:, 1] = (iu >> 8) & 255
-    pcm[:, 2] = (iu >> 16) & 255
-    pcm[:, 3] = ju & 255
-    pcm[:, 4] = (ju >> 8) & 255
-    pcm[:, 5] = (ju >> 16) & 255
-    with wave.open(path, 'wb') as f:
-        f.setnchannels(2)
-        f.setsampwidth(3)
-        f.setframerate(44100)
-        f.writeframes(pcm.tobytes())
 
 
 def export_tci(path, outdir, family, mic):
@@ -240,7 +179,8 @@ def export_tci(path, outdir, family, mic):
     for i, wv in enumerate(waves):
         try:
             if str(wv['stereo']).startswith('1'):
-                L, R, g, note = solve_stereo(wv['blob'], wv['frames'])
+                L, R, g, note = decode_stereo_wave(wv['blob'], wv['comp'],
+                                                   wv['frames'])
                 if L is None:
                     items.append((0, i, 'skip', None, g, note))
                     continue
@@ -275,17 +215,18 @@ def export_tci(path, outdir, family, mic):
             _pk, i, kind, payload, g, note = it
             fn = f'{family}_{mic}_V{vi:02d}_RR{ri}.wav'
             if kind == 'stereo':
-                export_stereo(f'{outdir}/{fn}', *payload)
+                export_stereo_wav(f'{outdir}/{fn}', *payload)
             else:
                 export_wav(f'{outdir}/{fn}', payload)
-            mapping.append((fn, i, g, note, int(_pk)))
+            mapping.append((fn, i, g, note, int(_pk), kind))
     skipped = [(i, g, n) for _p, i, k, _pl, g, n in items if k == 'skip']
+    tag = lambda k: 'st' if k == 'stereo' else 'mono'
     with open(f'{outdir}/MAP.txt', 'w') as f:
-        for fn, i, g, note, pk in mapping:
-            f.write(f'{fn} <- wave{i:02d} [{g}] peak={pk} {note}\n')
+        for fn, i, g, note, pk, kind in mapping:
+            f.write(f'{fn} <- wave{i:02d} [{g}] {tag(kind)} peak={pk} {note}\n')
         for i, g, n in skipped:
             f.write(f'-- wave{i:02d} [{g}] {n}\n')
-    return [(fn, g, '') for fn, _i, g, _n, _p in mapping]
+    return [(fn, g, '') for fn, _i, g, _n, _p, _k in mapping]
 
 
 def main(flt):

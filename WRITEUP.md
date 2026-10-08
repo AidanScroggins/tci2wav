@@ -124,17 +124,40 @@ of table lookup.
      but runs through head AND tail — it finds structure, not the
      boundary. Combine with length fits.
 
-## 5. Stereo (NRG/SSDR/OH) status
+## 5. Stereo (NRG/SSDR/OH): tails CRACKED, heads still open
 
-- Layout CRACKED by ear: tails are V1 201-blocks with L/R
-  SAMPLE-interleaved inside every block (even samples = one channel,
-  odd = the other). Block-interleave and sequential-halves score ~0.1.
-- Footer gives it away: `wd{i}samples = 2 * frames` (e.g. 164430).
-- `render_library.py` still skips `stereo=1` waves: heads (~165 samples)
-  use a non-V1 table/caller path. Exhausted statically: raw battery,
-  V1 1/2/3-block and multi±side grids (k ≤ 32), XOR/nibble/bitrev,
-  content table searches, sibling and cross-wave alignment, smoothness
-  oracles. All exact-fit V1 head parses decode as noise.
+- Footer gives the joint-stream layout away: `wd{i}samples = 2 * frames`
+  (e.g. 164430 for 82215 frames), so a stereo wave is ONE stream of
+  `2 * frames` sign-magnitude samples, not two separate wave bodies.
+- Sample `N` of that joint stream is L when `N` is even and R when `N` is odd,
+  counted over the WHOLE stream. Block-interleave and sequential-halves both
+  score ~0.1 (noise); global-index parity is the one that is smooth. Because
+  a V1 block holds an odd 201 samples the parity alternates block by block, so
+  deinterleaving must use the global index, not the position inside a block.
+- From the tail start on, the joint stream is a chain of plain V1 blocks
+  `[k:8][201 x k-bit]`, and the chain consumes `wd{i}comp1` to within 31
+  trailing pad bits. `k = 1..24` (`k = 1` always decodes to 0).
+- Tail location is therefore a boundary problem, not a search for structure:
+  scan bit offsets for a width byte in `1..24`, walk blocks, and accept the
+  chain that ends within 64 bits of `comp`. Every block boundary inside a real
+  tail qualifies, so the SMALLEST head wins.
+  - Chance matches inside the head are real (its bits are high-entropy audio
+    and ~9% of byte values look like a width byte), but a chain has to survive
+    millions of bits to reach the end, which they never do. Measured over the
+    whole library: **3902/3902 stereo waves decode, 0 unsolved, 0 clipped**,
+    heads `0..400` joint samples (median 186, i.e. ~93-100 frames ≈ 2 ms),
+    tail start `0..7236` bits, median 5 ms per wave in JS.
+  - A smoothness filter on the first blocks was tried and rejected: it looked
+    principled but rejected genuine noisy snares, pushing heads to p99 2204 /
+    max 3215. The plain min-head rule is both simpler and correct here.
+- Heads (0..400 joint samples, `0.6..2.3 ms`) use a non-V1 table/caller path
+  and are still NOT decoded. Exhausted statically: raw battery, V1 1/2/3-block
+  and multi±side grids (k ≤ 32), XOR/nibble/bitrev, content table searches,
+  sibling and cross-wave alignment, smoothness oracles. All exact-fit V1 head
+  parses decode as noise.
+- Shipped behaviour: export the exact tail, leave the unresolved head frames
+  silent, and say so. Grade `B` with `head:93fr silent` in `MAP.txt`. Nothing
+  is guessed and no stereo wave is skipped.
 - Reversal notes: real mask/sign tables extracted from the fat binary
   (`table1` file `0x5C10D0`, `table2` `0x5C1160`, `table3` `0x5C11F0`;
   vaddr = file − `0x4000`): `table1[b]`/`table2[b]` confirm k = byte
@@ -147,3 +170,13 @@ of table lookup.
   tables via caller-provided (k, count) — that caller mapping is the
   remaining gap (needs lldb logging once headless AU triggering works,
   or a caller-dataflow dive).
+
+## 6. Verification
+
+- `web/stereo.js` and `py/stereo.py` are two independent implementations of
+  the decoder. They agree **byte for byte** on the L/R sample data, and the
+  web app and the Python CLI agree byte for byte on exported WAVs and
+  `MAP.txt` (44/44 files across stereo and mono instruments).
+- Full library: 3902 stereo waves, all decoded, 0 clipped samples.
+- JS: `node --test web/tests` (parity harness; hashes only, no audio in repo).
+  Python: `python3 py/tci_export.py "ACKick"` for a single-instrument check.

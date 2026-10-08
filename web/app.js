@@ -56,11 +56,13 @@
         $('dllink').href = URL.createObjectURL(blob);
         $('dllink').download = `${family}_${mic}.zip`;
         $('dl').style.display = 'block';
-        let h = '<table><tr><th>File</th><th>Wave</th><th>Grade</th><th>Peak</th><th>Parse</th></tr>';
+let h = '<table><tr><th>File</th><th>Wave</th><th>Ch</th><th>Grade</th>'
+              + '<th>Peak</th><th>Parse</th></tr>';
         for (const wf of j.files) {
-          h += `<tr><td><code>${wf.name || '—'}</code></td><td>${wf.wave}</td>` +
-               `<td><span class="grade ${wf.grade}">${wf.grade}</span></td>` +
-               `<td>${wf.peak == null ? '' : wf.peak}</td><td>${escapeHtml(wf.note)}</td></tr>`;
+          h += `<tr><td><code>${wf.name || '—'}</code></td><td>${wf.wave}</td>`
+               + `<td>${wf.channels === 2 ? 'st' : 'mono'}</td>`
+               + `<td><span class="grade ${wf.grade}">${wf.grade}</span></td>`
+               + `<td>${wf.peak == null ? '' : wf.peak}</td><td>${escapeHtml(wf.note)}</td></tr>`;
         }
         $('res').innerHTML = h + '</table>';
         $('mapview').textContent = j.map;

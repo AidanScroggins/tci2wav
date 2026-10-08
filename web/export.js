@@ -1,12 +1,13 @@
-/* Velocity grouping, V/RR naming, WAV + MAP output, stereo solve.
+/* Velocity grouping, V/RR naming, WAV + MAP output, stereo decoding.
    Port of the export half of py/tci_export.py. Browser + Node. */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(require('./decode.js'), require('./solve.js'));
+    module.exports = factory(require('./decode.js'), require('./solve.js'),
+                             require('./stereo.js'));
   } else {
-    root.TCIExport = factory(root.TCIDecode, root.TCISolve);
+    root.TCIExport = factory(root.TCIDecode, root.TCISolve, root.TCIStereo);
   }
-}(typeof self !== 'undefined' ? self : this, function (D, S) {
+}(typeof self !== 'undefined' ? self : this, function (D, S, ST) {
   'use strict';
 
   const RR_RATIO = 1.12;
@@ -22,54 +23,21 @@
     return m;
   }
 
-  // Stereo: earliest long run, joint V1 stream, L/R = even/odd samples.
-  // Heads (~165 samples, table path): single-block structural attempt,
-  // smoothness-checked, capped at C. Returns {L,R,grade,note} or nulls.
-  function solveStereo(wblob, fr) {
-    const w = wblob instanceof Uint8Array ? wblob : new Uint8Array(wblob);
-    const bitlen = w.length * 8;
-    const runs = S.runScan(w, bitlen, 0, 200000, 50, 201);
-    const Ts = [...new Set(runs.map(r => r[1]))].sort((a, b) => a - b).slice(0, 6);
-    if (!Ts.length) return { L: null, R: null, grade: 'X', note: 'no tail run' };
-    const total = 2 * fr;
-    let best = null;
-    for (const T of Ts) {
-      const tl = S.tailCount(w, bitlen, T).cnt;
-      const lo = Math.max(64, total - tl - 2);
-      for (let C = lo; C <= total - tl + 44; C++) {
-        for (let k = 15; k <= 24; k++) {
-          const Sd = T - 8 - C * k;
-          if (Sd < 0 || Sd > 3000) continue;
-          const sc = S.smoothScore(S.decodeSpan(w, Sd + 8, k, C), k);
-          if (sc >= 0.15) continue;
-          const b = D.byteAt(w, Sd);
-          const key = ((b === k) || (S.KMAP[b] === k) ? 0 : 1) * 100000 + Sd;
-          if (!best || key < best.key) best = { key, C, k, S: Sd, T, b, sc };
-        }
-      }
-    }
-    if (!best) return { L: null, R: null, grade: 'X', note: 'head unsolved (table path)' };
-    const { C, k, S: Sd, T, b, sc } = best;
-    const joint = S.decodeSpan(w, Sd + 8, k, C);
-    let pos = T;
-    const rest = [];
-    while (pos + 8 <= bitlen) {
-      const kk = D.byteAt(w, pos);
-      if (!(kk >= 1 && kk <= 24)) break;
-      pos += 8;
-      for (let i = 0; i < 201; i++) {
-        if (pos + kk > bitlen) break;
-        const r = D.readSM(w, pos, kk);
-        pos = r[1];
-        rest.push(r[0] === 0 ? 0 : r[0]);
-      }
-    }
-    const full = Array.from(joint).concat(rest);
-    const n = Math.min(Math.floor(full.length / 2), fr);
-    const L = new Float64Array(n), R = new Float64Array(n);
-    for (let i = 0; i < n; i++) { L[i] = full[2 * i]; R[i] = full[2 * i + 1]; }
-    return { L, R, grade: 'C',
-             note: `stereo C=${C} k=${k} S=${Sd} T=${T} byte=${b} sm=${sc.toFixed(2)}` };
+  // Stereo waves decode exactly from their V1 tail; the ~2 ms attack head uses
+  // a path that is not cracked, so those frames stay silent and the gap is
+  // reported rather than guessed. `comp` is the footer's used-bit count.
+  function decodeStereoWave(blob, comp, frames) {
+    const r = ST.decodeStereo(blob, comp, frames);
+    if (!r) return null;
+    return {
+      L: r.L,
+      R: r.R,
+      peak: Math.max(attackPeak(r.L), attackPeak(r.R)),
+      grade: 'B',
+      note: `stereo tail@bit${r.tailStart}/${r.tailSamples}sm`
+        + (r.headFrames ? ` head:${r.headFrames}fr silent` : ' head:none'),
+      headFrames: r.headFrames,
+    };
   }
 
   function pack24LE(v) {
@@ -120,37 +88,41 @@
   }
 
   // waves: [{comp,frames,stereo,blob,v1?}]. Returns {files, skipped, mapText}.
-  // files: [{name, wave, grade, peak, note, wav:Uint8Array}]
+  // files: [{name, wave, channels, grade, peak, note, wav:Uint8Array}]
   function exportWaves(waves, family, mic) {
     const items = [];
     waves.forEach((wv, i) => {
+      const wave = `wave${String(i).padStart(2, '0')}`;
       try {
         if (String(wv.stereo).startsWith('1')) {
-          const r = solveStereo(wv.blob, wv.frames);
-          if (!r.L) {
-            items.push({ pk: 0, i, kind: 'skip', payload: null, grade: r.grade, note: r.note });
+          const r = decodeStereoWave(wv.blob, wv.comp, wv.frames);
+          if (!r) {
+            items.push({ pk: 0, i, wave, kind: 'skip', payload: null, channels: 2,
+                         grade: 'X', note: 'no V1 tail chain reaches end-of-bits' });
             return;
           }
-          const n = Math.min(r.L.length, r.R.length, wv.frames);
-          const pk = Math.max(attackPeak(r.L.subarray(0, n)), attackPeak(r.R.subarray(0, n)));
-          items.push({ pk, i, kind: 'stereo', payload: [r.L.subarray(0, n), r.R.subarray(0, n)],
-                        grade: r.grade, note: r.note });
+          items.push({ pk: r.peak, i, wave, kind: 'stereo', payload: [r.L, r.R],
+                       channels: 2, grade: r.grade, note: r.note });
           return;
         }
         if (wv.v1) {
           const v = D.applyVoiceRule(wv.v1, wv.frames);
-          items.push({ pk: attackPeak(v), i, kind: 'mono', payload: v, grade: 'A', note: 'V1 single' });
+          items.push({ pk: attackPeak(v), i, wave, kind: 'mono', payload: v,
+                       channels: 1, grade: 'A', note: 'V1 single' });
           return;
         }
         const r = S.solveWave(wv.blob, wv.frames);
         if (!r.spec) {
-          items.push({ pk: 0, i, kind: 'skip', payload: null, grade: r.grade, note: r.note });
+          items.push({ pk: 0, i, wave, kind: 'skip', payload: null, channels: 1,
+                       grade: r.grade, note: r.note });
           return;
         }
         const v = D.applyVoiceRule(D.decodeWave(wv.blob, wv.frames, r.spec), wv.frames);
-        items.push({ pk: attackPeak(v), i, kind: 'mono', payload: v, grade: r.grade, note: r.note });
+        items.push({ pk: attackPeak(v), i, wave, kind: 'mono', payload: v,
+                     channels: 1, grade: r.grade, note: r.note });
       } catch (e) {
-        items.push({ pk: 0, i, kind: 'skip', payload: null, grade: 'X', note: 'crash: ' + e.message });
+        items.push({ pk: 0, i, wave, kind: 'skip', payload: null, channels: 1,
+                     grade: 'X', note: 'crash: ' + e.message });
       }
     });
     const ranked = items.filter(it => it.kind !== 'skip').sort((a, b) => a.pk - b.pk);
@@ -172,16 +144,16 @@
         const wav = it.kind === 'stereo'
           ? exportStereoWav(it.payload[0], it.payload[1])
           : exportMonoWav(it.payload);
-        const peak = peakOf(it);
-        files.push({ name: fn, wave: `wave${String(it.i).padStart(2, '0')}`,
-                     grade: it.grade, peak, note: it.note, wav });
+        files.push({ name: fn, wave: it.wave, channels: it.channels,
+                     grade: it.grade, peak: peakOf(it), note: it.note, wav });
       });
     });
     const skipped = items.filter(it => it.kind === 'skip')
-      .map(it => ({ name: null, wave: `wave${String(it.i).padStart(2, '0')}`,
+      .map(it => ({ name: null, wave: it.wave, channels: it.channels,
                     grade: it.grade, peak: null, note: it.note }));
-    const lines = files.map(f => `${f.name} <- ${f.wave} [${f.grade}] peak=${f.peak} ${f.note}`)
-      .concat(skipped.map(s => `-- ${s.wave} [${s.grade}] ${s.note}`));
+    const tag = (c) => (c === 2 ? 'st' : 'mono');
+    const lines = files.map(f => `${f.name} <- ${f.wave} [${f.grade}] ${tag(f.channels)} peak=${f.peak} ${f.note}`)
+      .concat(skipped.map(s => `-- ${s.wave} [${s.grade}] ${tag(s.channels)} ${s.note}`));
     return { files, skipped, mapText: lines.join('\n') + '\n' };
   }
 
@@ -261,6 +233,6 @@
     return out;
   }
 
-  return { RR_RATIO, ATK_N, attackPeak, solveStereo, exportMonoWav,
+  return { RR_RATIO, ATK_N, attackPeak, decodeStereoWave, exportMonoWav,
            exportStereoWav, exportWaves, zipStore };
 }));

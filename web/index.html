@@ -23,7 +23,7 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:4px}
 </style>
 </head>
 <body>
-<h1>tci2wav <small style="font-weight:400;color:#666">mono V1/V2/Editor &rarr; velocity WAVs</small></h1>
+<h1>tci2wav <small style="font-weight:400;color:#666">mono + stereo V1/V2/Editor &rarr; velocity WAVs</small></h1>
 <div class="card">
 <label>TCI file (.tci) — stays on your machine, decoded locally</label>
 <input type="file" id="file" accept=".tci">
@@ -41,12 +41,16 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:4px}
 Naming: <code>FAMILY_MIC_V##_RR#.wav</code> (V = velocity by attack-peak,
 RR = round robin). Grades: <span class="grade A">A</span> exact+smooth
 <span class="grade B">B</span> close <span class="grade C">C</span> verify by ear
-<span class="grade X">X</span> skipped (stereo heads use an unsolved table path).
-Method: <a href="https://github.com/AidanScroggins/tci2wav/blob/main/WRITEUP.md">WRITEUP.md</a>
+<span class="grade X">X</span> skipped.
+<strong>Stereo:</strong> tails decode exactly (grade <span class="grade B">B</span>), but
+the ~2&nbsp;ms attack head uses an undecoded path, so those frames are silent and
+the count is listed in MAP.txt. Method:
+<a href="https://github.com/AidanScroggins/tci2wav/blob/main/WRITEUP.md">WRITEUP.md</a>
 &middot; code: <a href="https://github.com/AidanScroggins/tci2wav">github.com/AidanScroggins/tci2wav</a>
 </div>
 <script src="decode.js"></script>
 <script src="solve.js"></script>
+<script src="stereo.js"></script>
 <script src="export.js"></script>
 <script src="app.js"></script>
 </body>

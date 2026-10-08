@@ -7,6 +7,8 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  const BLOCK_SAMPLES = 201;
+  const MAX_K = 24;
 
   function sm24(b0, b1, b2) {
     const v = (b0 << 16) | (b1 << 8) | b2;
@@ -14,6 +16,7 @@
   }
 
   // k-bit sign-magnitude field at bit pos (MSB-first). Returns [value, nextPos].
+  // k=1 always decodes to 0: a lone bit carries no magnitude.
   function readSM(u8, pos, k) {
     let mag = 0;
     const sign = bitAt(u8, pos) ? -1 : 1;
@@ -49,6 +52,29 @@
     let g;
     while ((g = re.exec(m[1])) !== null) attrs[g[1]] = g[2];
     return attrs;
+  }
+
+  // Decode a V1 residual stream: a chain of [k:8][201 x k-bit] blocks starting
+  // at bit offset `bitPos`, stopping once `count` samples have been produced.
+  // The stream must consume exactly `comp` bits relative to `bitPos` and yield
+  // exactly `count` samples, or the result is null. Shared by the V1 and Editor
+  // containers.
+  function v1Stream(u8, bitPos, comp, count) {
+    const out = new Float64Array(count);
+    const end = bitPos + comp;
+    let pos = bitPos;
+    let n = 0;
+    while (n < count) {
+      if (pos + 8 > end) return null;
+      const k = byteAt(u8, pos);
+      if (k < 1 || k > MAX_K) return null;
+      pos += 8;
+      const take = Math.min(BLOCK_SAMPLES, count - n);
+      if (pos + take * k > end) return null;
+      for (let i = 0; i < take; i++, n++) out[n] = readSM(u8, pos + i * k, k)[0];
+      pos += take * k;
+    }
+    return pos === end ? out : null;
   }
 
   // Inflate a zlib stream with the platform decoder (no third-party code).
@@ -95,7 +121,12 @@
         const fr = parseInt(attrs['wd' + i + 'frames'], 10);
         if (!isFinite(comp) || !isFinite(fr)) return null;
         const nb = Math.ceil(comp / 8);
+        const smp = parseInt(attrs['wd' + i + 'samples'], 10);
         waves.push({ comp, frames: fr, stereo: attrs['wd' + i + 'stereo'] || '?',
+                     // Footer joint-sample count: frames for mono, 2 * frames
+                     // for stereo. Informational; the stereo decoder derives
+                     // the total from `frames`.
+                     samples: isFinite(smp) ? smp : fr,
                      blob: blob.subarray(off, off + nb) });
         off += nb;
       }
@@ -108,7 +139,7 @@
   // Trigger Instrument Editor variant ("COMPRESSED INSTRUMENT" tag):
   // 128-byte file header, then waves chained by 8-byte gap records
   // [05][prev_wave_span_bytes LE] ... [06][0] + params footer to EOF.
-  // Each wave: [01][comp u32 LE][frames u32 LE][V1 blocks, sign-magnitude].
+  // Each wave: [01][comp u32 LE][frames u32 LE][V1 residual blocks].
   function parseEditor(u8) {
     if (u8.length < 128) return null;
     if (!(u8[0] === 0x54 && u8[1] === 0x52 && u8[2] === 0x49 && u8[3] === 0x47 &&
@@ -117,7 +148,6 @@
     for (let i = 8; i < 64 && u8[i]; i++) tag += String.fromCharCode(u8[i]);
     if (tag.indexOf('COMPRESSED') !== 0) return null;
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    const bit = (base, p) => (u8[base + (p >> 3)] >> (7 - (p & 7))) & 1;
     const waves = [];
     let pos = 128;
     for (let w = 0; w < 256; w++) {
@@ -128,43 +158,20 @@
       const base = pos + 9;
       const blen = Math.ceil(comp / 8);
       if (base + blen > u8.length) break;
-      let p = 0;
-      const out = [];
-      let ok = true;
-      while (out.length < fr - 1) {
-        if (p + 8 > comp) { ok = false; break; }
-        let k = 0;
-        for (let i = 0; i < 8; i++) k = (k << 1) | bit(base, p + i);
-        if (!(k >= 1 && k <= 24)) { ok = false; break; }
-        p += 8;
-        const n = Math.min(201, fr - 1 - out.length);
-        if (p + n * k > comp) { ok = false; break; }
-        for (let i = 0; i < n; i++) {
-          // sign-magnitude residuals (same as V2 tails; two's complement
-          // decodes real drums as full-scale distortion)
-          let mag = 0;
-          const sign = bit(base, p) ? -1 : 1;
-          for (let j = 1; j < k; j++) mag = (mag << 1) | bit(base, p + j);
-          p += k;
-          const v = sign < 0 && mag !== 0 ? -mag : (sign < 0 ? 0 : mag);
-          out.push(v);
-        }
-      }
-      if (!ok || p !== comp || out.length !== fr - 1) break;
-      const span = 9 + blen;
-      waves.push({ comp, frames: fr, stereo: '0-ed', v1: Float64Array.from(out) });
-      pos += span;
+      const samples = v1Stream(u8, base * 8, comp, fr - 1);
+      if (!samples) break;
+      waves.push({ comp, frames: fr, stereo: '0-ed', samples: fr, v1: samples });
+      pos = base + blen;
       if (pos + 8 > u8.length) break;
       const gt = u8[pos];
-      if (gt === 0x06) break; // footer: params table to EOF
-      if (gt !== 0x05) break;
+      if (gt !== 0x05) break; // 0x06 footer: params table runs to EOF
       pos += 8;
     }
     return waves.length ? waves : null;
   }
-  // Oracle-shaped V1 single wave: [01][comp u32][frames u32] then
-  // [k:8][201 x k-bit] SIGN-MAGNITUDE residuals (two's complement
-  // decodes real drums as full-scale distortion). Tries BE then LE.
+
+  // Oracle-shaped V1 single wave: [01][comp u32][frames u32] then a V1
+  // residual stream. Tries big- then little-endian header.
   function parseV1(u8) {
     if (!u8.length || u8[0] !== 0x01) return null;
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
@@ -175,33 +182,10 @@
         fr = dv.getUint32(5, le);
       } catch (e) { continue; }
       if (!(comp > 0 && comp <= 8 * (u8.length - 9))) continue;
-      if (!(fr > 0 && fr < 1e7)) continue;
-      const body = u8.subarray(9);
-      const blen = comp;
-      let pos = 0;
-      const out = [];
-      let ok = true;
-      const bit = (p) => (body[p >> 3] >> (7 - (p & 7))) & 1;
-      while (out.length < fr - 1) {
-        if (pos + 8 > blen) { ok = false; break; }
-        let k = 0;
-        for (let i = 0; i < 8; i++) k = (k << 1) | bit(pos + i);
-        if (!(k >= 1 && k <= 24)) { ok = false; break; }
-        pos += 8;
-        const n = Math.min(201, fr - 1 - out.length);
-        if (pos + n * k > blen) { ok = false; break; }
-        for (let i = 0; i < n; i++) {
-          // sign-magnitude (matches the V2 voice path; two's complement
-          // decodes real drums as full-scale distortion)
-          let mag = 0;
-          const sign = bit(pos) ? -1 : 1;
-          for (let j = 1; j < k; j++) mag = (mag << 1) | bit(pos + j);
-          pos += k;
-          out.push(sign < 0 && mag !== 0 ? -mag : (sign < 0 ? 0 : mag));
-        }
-      }
-      if (ok && pos === comp && out.length === fr - 1) {
-        return [{ comp, frames: fr, stereo: '0-x', v1: Float64Array.from(out) }];
+      if (!(fr > 1 && fr < 1e7)) continue;
+      const samples = v1Stream(u8, 9 * 8, comp, fr - 1);
+      if (samples) {
+        return [{ comp, frames: fr, stereo: '0-x', samples: fr, v1: samples }];
       }
     }
     return null;
@@ -212,9 +196,9 @@
     const out = [];
     while (pos + 8 <= bitlen) {
       const k = byteAt(u8, pos);
-      if (!(k >= 1 && k <= 24)) break;
+      if (!(k >= 1 && k <= MAX_K)) break;
       pos += 8;
-      let n = 201;
+      let n = BLOCK_SAMPLES;
       if (pos + n * k > bitlen) n = Math.floor((bitlen - pos) / k);
       if (n <= 0) break;
       for (let i = 0; i < n; i++) {
@@ -275,5 +259,5 @@
   }
 
   return { sm24, readSM, bitAt, byteAt, bitsOf, parseV2, parseV1, parseEditor,
-           decodeBlocks, decodeWave, applyVoiceRule };
+           v1Stream, decodeBlocks, decodeWave, applyVoiceRule };
 }));

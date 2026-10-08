@@ -1,5 +1,6 @@
-/* Structural solver for unknown waves. Port of py/solve_wave.py +
-   render_library.solve_wave. Works in browsers and Node. */
+/* Structural solver for unknown MONO waves (raw head / identity block chains /
+   single attack block / tail-from-zeros). Port of py/solve_wave.py +
+   render_library.solve_wave. Stereo waves go through stereo.js instead. */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = factory(require('./decode.js'));
@@ -9,9 +10,15 @@
 }(typeof self !== 'undefined' ? self : this, function (D) {
   'use strict';
 
+  // Width bytes seen in mono attack-block heads, mapped to the bit width the
+  // decoder actually uses. Tail bytes are identity (byte == k). See WRITEUP.md.
   const KMAP = { 145: 23, 149: 23, 29: 23, 62: 23, 75: 23, 142: 20, 22: 21,
                  140: 21, 129: 20, 191: 20, 20: 20, 24: 24 };
 
+  // Bit offsets that start long `count`-sample V1 chains, longest first.
+  // The longest run is not always the true tail start: a misframed first block
+  // can extend a run backwards over head data, so every hit still needs a
+  // length + smoothness check before it is trusted (see solveWave).
   function runScan(u8, bitlen, lo, hi, minRun, count) {
     lo = lo || 0; hi = hi || 60000; minRun = minRun || 10; count = count || 201;
     const out = [];

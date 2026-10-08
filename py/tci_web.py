@@ -32,9 +32,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from tci_decode import apply_voice_rule, decode_wave, export_wav  # noqa: E402
-from tci_export import (RR_RATIO, ATK_N, attack_peak, export_stereo,  # noqa: E402
-                        parse_v1, parse_v2)
+from tci_decode import (apply_voice_rule, decode_wave, export_stereo_wav,  # noqa: E402
+                        export_wav)
+from tci_export import (RR_RATIO, ATK_N, attack_peak,  # noqa: E402
+                        decode_stereo_wave, parse_v1, parse_v2)
 from render_library import solve_wave  # noqa: E402
 
 STORE = {}
@@ -73,7 +74,8 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:4px}
 Naming: <code>FAMILY_MIC_V##_RR#.wav</code> (V = velocity by attack-peak,
 RR = round robin). Grades: <span class="grade A">A</span> exact+smooth
 <span class="grade B">B</span> close <span class="grade C">C</span> verify by ear
-<span class="grade X">X</span> skipped (stereo heads use an unsolved table path).
+<span class="grade B">B</span> stereo: tail is exact, first ~2 ms (head) is an
+undecoded table path and is left silent <span class="grade X">X</span> skipped.
 </div>
 <script>
 function guess(){
@@ -101,9 +103,9 @@ async function go(){
   document.getElementById('status').textContent=j.summary;
   document.getElementById('dllink').href='/api/download?token='+j.token;
   document.getElementById('dl').style.display='block';
-  let h='<table><tr><th>File</th><th>Wave</th><th>Grade</th><th>Peak</th><th>Parse</th></tr>';
+  let h='<table><tr><th>File</th><th>Ch</th><th>Wave</th><th>Grade</th><th>Peak</th><th>Parse</th></tr>';
   for(const w of j.files)
-    h+=`<tr><td><code>${w.name||'—'}</code></td><td>${w.wave}</td><td><span class="grade ${w.grade}">${w.grade}</span></td><td>${w.peak||''}</td><td>${w.note}</td></tr>`;
+    h+=`<tr><td><code>${w.name||'—'}</code></td><td>${w.ch===2?'st':(w.ch===1?'mono':'—')}</td><td>${w.wave}</td><td><span class="grade ${w.grade}">${w.grade}</span></td><td>${w.peak||''}</td><td>${w.note}</td></tr>`;
   document.getElementById('res').innerHTML=h+'</table><p style="color:#666;font-size:13px">Full parse notes ship as MAP.txt inside the ZIP.</p>';
 }
 </script></body></html>
@@ -150,8 +152,14 @@ def decode_upload(data, family, mic):
     for i, wv in enumerate(waves):
         try:
             if str(wv['stereo']).startswith('1'):
-                items.append((0, i, 'skip', None, 'X',
-                              'stereo skipped (heads use unsolved table path)'))
+                L, R, g, note = decode_stereo_wave(wv['blob'], wv['comp'],
+                                                   wv['frames'])
+                if L is None:
+                    items.append((0, i, 'skip', None, g, note))
+                    continue
+                n = min(len(L), len(R), wv['frames'])
+                pk = max(attack_peak(L[:n]), attack_peak(R[:n]))
+                items.append((pk, i, 'stereo', (L[:n], R[:n]), g, note))
                 continue
             if 'v1' in wv:
                 v = apply_voice_rule(wv['v1'], wv['frames'])
@@ -181,14 +189,21 @@ def decode_upload(data, family, mic):
         for ri, it in enumerate(sorted(grp, key=lambda x: x[0]), 1):
             _pk, i, kind, payload, g, note = it
             fn = f'{family}_{mic}_V{vi:02d}_RR{ri}.wav'
-            export_wav(f'{tmp}/{fn}', payload)
+            if kind == 'stereo':
+                export_stereo_wav(f'{tmp}/{fn}', *payload)
+                peak = int(max(np.abs(np.asarray(payload[0], float)).max(),
+                               np.abs(np.asarray(payload[1], float)).max()))
+            else:
+                export_wav(f'{tmp}/{fn}', payload)
+                peak = int(np.abs(np.asarray(payload, float)).max())
             files.append({'name': fn, 'wave': f'wave{i:02d}', 'grade': g,
-                          'peak': int(np.abs(np.asarray(payload, float)).max()),
-                          'note': note})
+                          'ch': 2 if kind == 'stereo' else 1,
+                          'peak': peak, 'note': note})
     skipped = [{'name': None, 'wave': f'wave{i:02d}', 'grade': g, 'peak': None,
                 'note': n} for _p, i, k, _pl, g, n in items if k == 'skip']
-    lines = [f"{f['name']} <- {f['wave']} [{f['grade']}] peak={f['peak']} {f['note']}"
-             for f in files]
+    tag = lambda f: 'st' if f.get('ch') == 2 else 'mono'
+    lines = [f"{f['name']} <- {f['wave']} [{f['grade']}] {tag(f)} "
+             f"peak={f['peak']} {f['note']}" for f in files]
     lines += [f"-- {s['wave']} [{s['grade']}] {s['note']}" for s in skipped]
     with open(f'{tmp}/MAP.txt', 'w') as fh:
         fh.write('\n'.join(lines) + '\n')

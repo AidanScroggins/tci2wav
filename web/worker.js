@@ -1,5 +1,5 @@
 /* Web Worker: decode off the main thread. */
-importScripts('decode.js', 'solve.js', 'export.js');
+importScripts('decode.js', 'solve.js', 'stereo.js', 'export.js');
 
 onmessage = async function (e) {
   const { id, family, mic, buffer } = e.data;
@@ -14,15 +14,18 @@ onmessage = async function (e) {
     }
     const r = TCIExport.exportWaves(waves, family, mic);
     const files = r.files.map(f => ({
-      name: f.name, wave: f.wave, grade: f.grade, peak: f.peak, note: f.note,
-      wav: f.wav.buffer
+      name: f.name, wave: f.wave, channels: f.channels, grade: f.grade,
+      peak: f.peak, note: f.note, wav: f.wav.buffer
     }));
     const skipped = r.skipped.map(s => ({
-      name: null, wave: s.wave, grade: s.grade, peak: null, note: s.note
+      name: null, wave: s.wave, channels: s.channels, grade: s.grade,
+      peak: null, note: s.note
     }));
     const xfer = files.map(f => f.wav);
-    postMessage({ id, ok: true, files: files.concat(skipped), map: r.mapText,
-                  summary: `${files.length} WAVs + MAP.txt (${r.skipped.length} skipped)` }, xfer);
+    const stereo = files.filter(f => f.channels === 2).length;
+    const summary = `${files.length} WAVs + MAP.txt (${r.skipped.length} skipped`
+      + (stereo ? `, ${stereo} stereo` : '') + ')';
+    postMessage({ id, ok: true, files: files.concat(skipped), map: r.mapText, summary }, xfer);
   } catch (err) {
     postMessage({ id, ok: false, error: String(err && err.message || err) });
   }

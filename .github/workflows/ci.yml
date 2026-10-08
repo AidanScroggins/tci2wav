@@ -18,6 +18,8 @@ jobs:
         env:
           TCI_KICK: ''
           TCI_SNARE: ''
+          TCI_STKICK: ''
+          TCI_STSNARE: ''
   guard-ip:
     runs-on: ubuntu-latest
     steps:

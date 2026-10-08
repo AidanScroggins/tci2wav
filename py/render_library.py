@@ -30,8 +30,9 @@ import zlib
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stereo import decode_stereo
 from tci_decode import (apply_voice_rule, bits_of, decode_blocks, decode_wave,
-                        export_wav, sm24)
+                        export_stereo_wav, export_wav, sm24)
 
 LIB = '/Users/aidan/Documents/Trigger2Library'
 OUT = f'{LIB}/TCI-Exports'
@@ -240,6 +241,23 @@ def render_tci(path, outdir):
     os.makedirs(outdir, exist_ok=True)
     report = []
     for i, wv in enumerate(waves):
+        if str(wv['stereo']).startswith('1'):
+            try:
+                st = decode_stereo(wv['blob'], wv['comp'], wv['frames'])
+            except Exception as e:  # never break the batch
+                report.append((i, 'X', f'stereo crash: {e}'))
+                continue
+            if st is None:
+                report.append((i, 'X', 'stereo: no V1 tail chain'))
+                continue
+            fn = f'{outdir}/wave{i:02d}_{wv["frames"]}fr_st.wav'
+            export_stereo_wav(fn, st['L'], st['R'])
+            gap = (f'head:{st["headFrames"]}fr silent' if st['headFrames']
+                   else 'head:none')
+            report.append((i, 'B',
+                           f'stereo tail@bit{st["tailStart"]}/{st["tailSamples"]}sm '
+                           f'{gap} peak={int(max(np.abs(st["L"]).max(), np.abs(st["R"]).max()))}'))
+            continue
         if str(wv['stereo']) != '0':
             report.append((i, 'X', f'stereo={wv["stereo"]} skipped'))
             continue
