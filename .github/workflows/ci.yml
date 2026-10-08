@@ -14,6 +14,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: node --test web/tests/parity.test.js
+      - run: node --test web/tests/app.test.js
       - run: node --test web/tests/parity-local.mjs
         env:
           TCI_KICK: ''

@@ -160,6 +160,7 @@
   let nextId = 1;
   let batchCancel = false;
   let selected = null;           // job id shown in the results table
+  let zipUrl = null;             // blob URL of the current download
 
   // A job is {id, file, rel, sourceDir, family, mic, state, ui, result}
   function makeJob(file, fromFolder) {
@@ -221,6 +222,7 @@
     $('resRows').textContent = '';
     $('mapview').textContent = '';
     $('dl').hidden = true;
+    if (zipUrl) { URL.revokeObjectURL(zipUrl); zipUrl = null; }
     $('checkAll').checked = false;
     status($('st'), '');
   };
@@ -340,6 +342,11 @@
     j.ui.state.style.color = j.state === 'done' ? 'var(--accent-2)'
       : j.state === 'failed' ? 'var(--danger)' : 'var(--muted)';
     j.ui.play.hidden = !j.result;
+    const playable = !!j.result && auditions.has(j.id);
+    j.ui.play.disabled = !playable;
+    j.ui.play.title = !j.result ? 'Show and audition'
+      : playable ? 'Show and audition'
+        : 'Audio was released to save memory. Convert this file again to audition it.';
   }
 
   function selectRow(j) {
@@ -350,32 +357,41 @@
   /* ── auditions ───────────────────────────────────────────────────────── */
   const auditions = new Map();
 
+  // Each converted job keeps its own blob URLs so any of them can be auditioned
+  // afterwards. Only the entry being replaced is revoked here; older jobs are
+  // dropped by the PREVIEW_KEEP window below, otherwise a folder run would hold
+  // every decoded instrument in memory.
   function registerAuditions(jobId, files) {
-    for (const [k, rec] of auditions) for (const u of rec.urls.values()) URL.revokeObjectURL(u);
+    const prev = auditions.get(jobId);
+    if (prev) for (const u of prev.urls.values()) URL.revokeObjectURL(u);
     const urls = new Map();
     for (const f of files) {
       if (f.name) urls.set(f.name, URL.createObjectURL(new Blob([f.wav], { type: 'audio/wav' })));
     }
-    auditions.set(jobId, { urls, rows: files });
+    auditions.delete(jobId);
+    auditions.set(jobId, { urls, rows: files });   // re-insert keeps Map order = recency
     while (auditions.size > PREVIEW_KEEP) {
       const oldest = auditions.keys().next().value;
       if (oldest === jobId) break;
-      for (const u of auditions.get(oldest).urls.values()) URL.revokeObjectURL(u);
+      const rec = auditions.get(oldest);
+      for (const u of rec.urls.values()) URL.revokeObjectURL(u);
       auditions.delete(oldest);
-      if (currentJob && !auditions.has(currentJob)) { stopAll(); currentJob = null; }
+      if (currentJob === oldest) { stopAll(); currentJob = null; }
     }
+    for (const j of jobs) updateJobRow(j);
   }
 
   function showJob(j, playFirst) {
     if (!j.result) return;
     selectRow(j);
+    const haveAudio = auditions.has(j.id);
     const host = $('resRows');
     host.textContent = '';
     for (const f of j.result.files) {
       const tr = document.createElement('tr');
       const playable = !!f.name;
       tr.innerHTML =
-        `<td>${playable ? `<button class="playbtn" data-key="${attr(j.id)}" data-name="${attr(f.name)}">▶ play</button>` : ''}</td>` +
+        `<td>${playable ? `<button class="playbtn"${haveAudio ? '' : ' disabled title="Audio was released; convert this file again"'} data-key="${attr(j.id)}" data-name="${attr(f.name)}">▶ play</button>` : ''}</td>` +
         `<td><code>${esc(f.name || 'skipped')}</code></td>` +
         `<td><span class="chip ${f.channels === 2 ? 'st' : ''}">${f.channels === 2 ? 'stereo' : 'mono'}</span></td>` +
         `<td class="num">${esc(f.wave)}</td>` +
@@ -425,6 +441,7 @@
     $('mapview').textContent = '';
     stopAll();
 
+    if (zipUrl) { URL.revokeObjectURL(zipUrl); zipUrl = null; }   // free the last ZIP
     const zip = new TCIZip.ZipWriter();
     const map = [];
     const seenDirs = new Set();
@@ -493,7 +510,8 @@
       status($('st'), `Cancelled after ${done}/${jobs.length}. Nothing downloaded.`, 'err');
     } else {
       await zip.addText('MAP.txt', map.join('\n') + '\n');
-      dl.href = URL.createObjectURL(zip.finish());
+      zipUrl = URL.createObjectURL(zip.finish());
+      dl.href = zipUrl;
       dl.download = jobs.length === 1
         ? `${jobs[0].family}_${jobs[0].mic}.zip`
         : `${root || 'tci2wav'}_batch.zip`;

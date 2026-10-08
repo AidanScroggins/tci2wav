@@ -190,10 +190,14 @@ of table lookup.
   into one ZIP as `<Category>/<Instrument>/<MIC>/`, the same tree the Python CLI
   writes. A file with no folder of its own lands flat in the ZIP root.
   `zip.js` appends one entry at a time (deflate when it shrinks, store
-  otherwise) so a multi-gigabyte run never materialises the whole archive, and
-  only the six most recent jobs keep audio buffers alive for previewing.
+  otherwise) so a multi-gigabyte run never materialises the whole archive.
   Progress, ETA, per-job state, cancel, and failures reported rather than
   fatal.
+- **Audition buffers.** Each converted job keeps its own blob URLs so any of
+  them can be played back later; only the entry being replaced is released,
+  plus the six most recent (LRU) and the previous ZIP blob. Registering a new
+  job must not revoke the others, which is what the app tests in
+  `web/tests/app.test.js` guard against.
 
 ## 7. Verification
 
