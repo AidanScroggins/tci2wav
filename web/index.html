@@ -153,11 +153,19 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .playbtn{padding:3px 10px;font-size:12px;line-height:1.5;min-width:52px}
 .playbtn.on{border-color:var(--accent-2);color:var(--accent-2)}
 
-.preview{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;
-  padding:14px;border:1px solid var(--line);border-radius:var(--radius-sm);
+/* The audio element has a large intrinsic width, so it gets its own full
+   width row. Sharing a flex row with the slider made it overflow its box and
+   sit on top of the slider. */
+.preview{display:flex;flex-direction:column;gap:10px;padding:14px;
+  border:1px solid var(--line);border-radius:var(--radius-sm);
   background:linear-gradient(180deg,var(--panel-2),transparent);margin-top:12px}
-.preview audio{width:100%;height:36px}
-.volbox{flex:1 1 260px;min-width:220px}
+.preview audio{display:block;width:100%;min-width:0;height:36px}
+.pv-meta{display:flex;justify-content:space-between;gap:12px;font-size:12px;
+  color:var(--muted);min-width:0}
+.pv-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-ctrl{display:flex;gap:16px;align-items:center;flex-wrap:wrap;min-width:0}
+.pv-btns{display:flex;gap:12px;align-items:center;flex:0 0 auto}
+.volbox{flex:1 1 240px;min-width:180px;min-width:0}
 input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:22px;
   background:transparent;cursor:pointer}
 input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:99px;
@@ -270,21 +278,21 @@ details[open] > summary::before{content:"▾ "}
   <p class="hint">Any converted wave can be auditioned. Preview gain does not affect exports.</p>
 
   <div class="preview">
-    <div style="flex:2 1 340px;min-width:260px">
-      <audio id="player" controls preload="none"></audio>
-      <div class="volrow" style="margin-top:8px">
-        <span id="nowPlaying">Nothing loaded</span>
-        <span>peak <b id="peakDb">n/a</b></span>
-      </div>
-      <div class="peak"><i id="peakBar"></i></div>
+    <audio id="player" controls preload="none"></audio>
+    <div class="pv-meta">
+      <span id="nowPlaying">Nothing loaded</span>
+      <span>peak <b id="peakDb">n/a</b></span>
     </div>
-    <div class="volbox">
-      <div class="volrow"><span>Preview volume</span><b><span id="volPct">35</span>% · <span id="volDb">-9.1</span> dB</b></div>
-      <input type="range" id="vol" min="0" max="100" step="1" value="35" aria-label="Preview volume">
-      <div class="btnrow" style="margin-top:6px">
+    <div class="peak"><i id="peakBar"></i></div>
+    <div class="pv-ctrl">
+      <div class="volbox">
+        <div class="volrow"><span>Preview volume</span><b><span id="volPct">35</span>% · <span id="volDb">-9.1</span> dB</b></div>
+        <input type="range" id="vol" min="0" max="100" step="1" value="35" aria-label="Preview volume">
+      </div>
+      <div class="pv-btns">
         <button id="stopAll" class="ghost">Stop</button>
-        <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400">
-          <input type="checkbox" id="fadeIn" checked> soft start (avoids clicks)
+        <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px">
+          <input type="checkbox" id="fadeIn" checked> soft start
         </label>
       </div>
     </div>
