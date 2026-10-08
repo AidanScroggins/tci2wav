@@ -1,24 +1,37 @@
-/* UI glue: single-file and folder conversion, audition player, ZIP download.
+/* UI glue: a queue of .tci jobs, converted into one ZIP, with an audition player.
 
-   Preview safety: decoded waves can hit nearly full scale, so the player starts
-   at a low level and optionally ramps in over ~25 ms (a hard start on a
-   full-scale transient is an unpleasant click). Export is always bit-exact and
-   never passes through this gain.
+   One code path covers both cases. Adding a single file produces a queue of
+   one, so "one instrument" and "a whole library" differ only in how many rows
+   the Jobs table has. Family and MIC are guesses derived from the path, and
+   are editable per job because the guess is wrong for plenty of real folders.
 
-   Batch memory: a whole library is gigabytes of 24-bit PCM, so results are
-   streamed into the ZIP one entry at a time and only the most recent
-   instruments keep their audio buffers alive for previewing (PREVIEW_KEEP). */
+   Preview safety: decoded waves can hit nearly full scale, so the player
+   starts at a low level and ramps in over ~25 ms. A hard start on a
+   full-scale transient is an unpleasant click. Export never passes through
+   this gain and stays bit-exact.
+
+   Batch memory: a library is gigabytes of 24-bit PCM, so entries are streamed
+   into the ZIP one at a time and only the most recent jobs keep their audio
+   buffers alive for previewing (PREVIEW_KEEP). */
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
   const FS = 2 ** 23 - 1;              // 24-bit full scale
-  const PREVIEW_KEEP = 6;               // instruments kept auditionable
-  const SEP = '\u0000';                // joins instrument key and wave name
-  const WARN_BYTES = 2 * 1024 ** 3;     // ~2 GB of input before we warn
+  const PREVIEW_KEEP = 6;
+  const SEP = '\u0000';   // not legal in a filename, so it cannot clash
+  const WARN_BYTES = 2 * 1024 ** 3;
 
   const esc = (s) => String(s).replace(/[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const attr = (s) => String(s).replace(/["\\]/g, '\\$&');
+  const dbOf = (v) => (v > 0 ? (20 * Math.log10(v)).toFixed(1) : '-inf');
+  const human = (b) => {
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0, n = b;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(n < 10 && i > 0 ? 1 : 0) + ' ' + u[i];
+  };
 
   /* ── theme ───────────────────────────────────────────────────────────── */
   const THEME_KEY = 'tci2wav-theme';
@@ -40,11 +53,9 @@
   const fadeBox = $('fadeIn');
   let targetVol = volSlider.valueAsNumber / 100;
   let ramp = null;
-  let currentToken = null;      // instrumentKey + SEP + wave name
-  let currentKey = null;        // instrumentKey, for dropping stale auditions
+  let currentToken = null;      // jobId + SEP + wave name
+  let currentJob = null;
   let currentPeak = 0;
-
-  function dbOf(v) { return v > 0 ? (20 * Math.log10(v)).toFixed(1) : '-inf'; }
 
   function showVolume() {
     const pct = Math.round(targetVol * 100);
@@ -54,31 +65,37 @@
   }
   function killRamp() { if (ramp) { cancelAnimationFrame(ramp); ramp = null; } }
 
-  // Ramp up from silence so a full-scale attack transient does not click.
   function rampIn() {
     killRamp();
     if (!fadeBox.checked) { player.volume = targetVol; return; }
-    const t0 = performance.now(), ms = 25;
+    const t0 = performance.now();
     player.volume = 0;
     const step = (t) => {
-      const k = Math.min(1, (t - t0) / ms);
-      player.volume = targetVol * (k * k * (3 - 2 * k));   // smoothstep
+      const k = Math.min(1, (t - t0) / 25);
+      player.volume = targetVol * k * k * (3 - 2 * k);   // smoothstep
       ramp = k < 1 ? requestAnimationFrame(step) : null;
     };
     ramp = requestAnimationFrame(step);
   }
 
-  function loadPreview(key, token, url, label, peak) {
+  function markPlaying(on) {
+    for (const b of document.querySelectorAll('.playbtn.on')) b.classList.remove('on');
+    if (!on || !currentToken) return;
+    const b = document.querySelector(
+      `.playbtn[data-key="${attr(currentJob)}"][data-name="${attr(currentToken.slice(currentJob.length + 1))}"]`);
+    if (b) b.classList.add('on');
+  }
+
+  function loadPreview(jobId, token, url, label, peak) {
     killRamp();
     const same = currentToken === token;
     currentToken = token;
-    currentKey = key;
+    currentJob = jobId;
     currentPeak = peak || 0;
     $('nowPlaying').textContent = label;
     const norm = currentPeak / FS;
     $('peakBar').style.width = Math.min(100, norm * 100).toFixed(1) + '%';
-    $('peakDb').textContent = currentPeak
-      ? (norm >= 0.98 ? '⚠ ' : '') + dbOf(norm) + ' dBFS' : '—';
+    $('peakDb').textContent = currentPeak ? (norm >= 0.98 ? '! ' : '') + dbOf(norm) + ' dBFS' : 'n/a';
     if (same) return;
     player.src = url;
     player.load();
@@ -96,15 +113,6 @@
   player.addEventListener('play', () => markPlaying(true));
   player.addEventListener('pause', () => markPlaying(false));
   player.addEventListener('ended', () => markPlaying(false));
-  function markPlaying(on) {
-    for (const b of document.querySelectorAll('.playbtn.on')) b.classList.remove('on');
-    if (!on || !currentToken || !currentKey) return;
-    const b = document.querySelector(
-      `.playbtn[data-key="${attr(currentKey)}"][data-name="${attr(currentToken.slice(currentKey.length + 1))}"]`);
-    if (b) b.classList.add('on');
-  }
-  function attr(s) { return String(s).replace(/["\\]/g, '\\$&'); }
-
   volSlider.addEventListener('input', () => { targetVol = volSlider.valueAsNumber / 100; showVolume(); });
   $('stopAll').onclick = stopAll;
   showVolume();
@@ -126,9 +134,8 @@
     };
     workers.push(w);
   }
-
   let rr = 0;
-  function decodeInWorker(file, family, mic) {
+  function decodeOne(file, family, mic) {
     return new Promise((resolve, reject) => {
       const rd = new FileReader();
       rd.onerror = () => reject(new Error('could not read ' + file.name));
@@ -142,264 +149,362 @@
     });
   }
 
-  /* ── shared helpers ──────────────────────────────────────────────────── */
-  const clean = TCINaming.clean;
   function status(el, msg, kind) {
     el.textContent = msg || '';
     el.className = 'status' + (msg ? ' show' : '') + (kind ? ' ' + kind : '');
   }
-  function human(bytes) {
-    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let i = 0, n = bytes;
-    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    return n.toFixed(n < 10 && i > 0 ? 1 : 0) + ' ' + u[i];
+
+  /* ── job queue ───────────────────────────────────────────────────────── */
+  let jobs = [];
+  let root = '';                 // folder the user picked, stripped from paths
+  let nextId = 1;
+  let batchCancel = false;
+  let selected = null;           // job id shown in the results table
+
+  // A job is {id, file, rel, sourceDir, family, mic, state, ui, result}
+  function makeJob(file, fromFolder) {
+    const rel = (fromFolder && file.webkitRelativePath) ? file.webkitRelativePath : file.name;
+    const info = TCINaming.describe(rel);
+    return {
+      id: String(nextId++),
+      file,
+      rel,
+      root,                     // remembered, so a later selection cannot move it
+      sourceDir: info.dir,
+      family: info.family,
+      mic: info.mic,
+      state: 'queued',
+      ui: null,
+      result: null,
+    };
   }
 
-  /* ── results table + preview registry ────────────────────────────────── */
-  // key -> { rows, urls: Map(name -> url) }. Oldest are dropped so a folder
-  // run does not accumulate gigabytes of blob URLs.
-  const auditions = new Map();
+  // Output directory for a job. Files with no folder of their own land flat in
+  // the ZIP root, which keeps a single-file download tidy.
+  function outDir(job) {
+    const info = TCINaming.describe(job.rel);
+    info.family = job.family;
+    info.mic = job.mic;
+    if (!job.sourceDir) return '';
+    return TCINaming.targetDir(info, job.root);
+  }
 
-  function registerAuditions(key, files) {
-    for (const [k, rec] of auditions) for (const u of rec.urls.values()) URL.revokeObjectURL(u);
-    const urls = new Map();
-    for (const f of files) if (f.name) urls.set(f.name, URL.createObjectURL(new Blob([f.wav], { type: 'audio/wav' })));
-    auditions.set(key, { urls, rows: files });
-    while (auditions.size > PREVIEW_KEEP) {
-      const oldest = auditions.keys().next().value;
-      if (oldest === key) break;
-      for (const u of auditions.get(oldest).urls.values()) URL.revokeObjectURL(u);
-      auditions.delete(oldest);
-      if (currentKey && !auditions.has(currentKey)) { stopAll(); currentKey = null; }
+  function addFiles(list, fromFolder) {
+    const files = [...list].filter((f) => /\.tci$/i.test(f.name));
+    if (!files.length) { status($('st'), 'No .tci files in that selection.', 'err'); return; }
+    root = fromFolder && files[0].webkitRelativePath
+      ? files[0].webkitRelativePath.split('/')[0] : '';
+    jobs = jobs.concat(files.map((f) => makeJob(f, fromFolder)));
+    renderJobs();
+    const bytes = files.reduce((a, f) => a + f.size, 0);
+    $('pickChip').textContent = `${jobs.length} .tci · ${human(bytes)}`;
+    $('clear').hidden = false;
+    status($('st'), bytes > WARN_BYTES
+      ? `${human(bytes)} selected. A full run takes a while; the page stays usable.`
+      : 'Ready. Convert to run.', bytes > WARN_BYTES ? '' : 'ok');
+  }
+
+  $('files').addEventListener('change', (e) => { addFiles(e.target.files, false); });
+  $('folder').addEventListener('change', (e) => { addFiles(e.target.files, true); });
+
+  $('clear').onclick = () => {
+    stopAll();
+    for (const rec of auditions.values()) for (const u of rec.urls.values()) URL.revokeObjectURL(u);
+    auditions.clear();
+    jobs = [];
+    selected = null;
+    renderJobs();
+    $('pickChip').textContent = '';
+    $('clear').hidden = true;
+    $('jobWrap').hidden = true;
+    $('resWrap').hidden = true;
+    $('resRows').textContent = '';
+    $('mapview').textContent = '';
+    $('dl').hidden = true;
+    $('checkAll').checked = false;
+    status($('st'), '');
+  };
+
+  $('rederive').onclick = () => {
+    for (const j of jobs) {
+      const info = TCINaming.describe(j.rel);
+      j.family = info.family;
+      j.mic = info.mic;
+      if (j.ui) { j.ui.family.value = j.family; j.ui.mic.value = j.mic; }
+    }
+    markDuplicates();
+    status($('st'), 'Names re-derived from paths.', 'ok');
+  };
+
+  $('checkAll').onchange = (e) => {
+    for (const j of jobs) if (j.ui) { j.ui.check.checked = e.target.checked; syncRemoveBtn(); }
+  };
+  function syncRemoveBtn() {
+    $('removeSel').hidden = !jobs.some((j) => j.ui && j.ui.check.checked);
+  }
+  $('removeSel').onclick = () => {
+    const dropped = jobs.filter((j) => j.ui && j.ui.check.checked);
+    for (const j of dropped) j.ui.tr.remove();
+    jobs = jobs.filter((j) => !dropped.includes(j));
+    $('checkAll').checked = false;
+    syncRemoveBtn();
+    $('pickChip').textContent = jobs.length ? `${jobs.length} .tci` : '';
+    $('clear').hidden = !jobs.length;
+    if (!jobs.length) $('jobWrap').hidden = true;
+  };
+
+  // Two jobs writing the same output path would overwrite each other in the
+  // ZIP, which is silent and confusing, so flag it.
+  function markDuplicates() {
+    const seen = new Map();
+    for (const j of jobs) {
+      const key = outDir(j) + '|' + j.family + '|' + j.mic;
+      seen.set(key, (seen.get(key) || 0) + 1);
+    }
+    for (const j of jobs) {
+      const key = outDir(j) + '|' + j.family + '|' + j.mic;
+      const dup = seen.get(key) > 1;
+      if (j.ui) j.ui.tr.classList.toggle('dup', dup);
+      if (j.ui) j.ui.warn.textContent = dup ? 'duplicate output path' : '';
     }
   }
 
-  function waveRows(key, files, host) {
-    host.textContent = '';
+  function renderJobs() {
+    const tbody = $('jobRows');
+    if (!jobs.length) { $('jobWrap').hidden = true; return; }
+    $('jobWrap').hidden = false;
+    const keep = new Set(jobs.map((j) => j.id));
+    for (const tr of [...tbody.children]) {
+      if (!keep.has(tr.dataset.job)) tr.remove();
+    }
+    for (const j of jobs) {
+      if (j.ui) { updateJobRow(j); continue; }
+      const tr = document.createElement('tr');
+      tr.dataset.job = j.id;
+      tr.innerHTML =
+        `<td><input type="checkbox" aria-label="Select ${esc(j.file.name)}"></td>` +
+        `<td><code>${esc(j.file.name)}</code><br><span class="outpath">${esc(j.rel)}</span></td>` +
+        `<td><input type="text" class="tblin" aria-label="Sample family"></td>` +
+        `<td><input type="text" class="tblin" aria-label="MIC type"></td>` +
+        `<td><span class="outpath"></span><br><span class="warn"></span></td>` +
+        `<td class="num"></td><td class="num"></td>` +
+        `<td style="color:var(--muted)">queued</td>` +
+        `<td><button class="minibtn playbtn" hidden title="Show and audition">▶</button></td>`;
+      tbody.appendChild(tr);
+      const cells = tr.children;
+      const family = cells[2].querySelector('input');
+      const mic = cells[3].querySelector('input');
+      const check = cells[0].querySelector('input');
+      const play = cells[8].querySelector('button');
+      family.value = j.family;
+      mic.value = j.mic;
+      // The path reacts while typing; the box itself is only tidied on blur so
+      // the caret is not fought mid-keystroke.
+      family.addEventListener('input', () => {
+        j.family = TCINaming.clean(family.value, 'Sample');
+        updateJobRow(j);
+        markDuplicates();
+      });
+      mic.addEventListener('input', () => {
+        j.mic = TCINaming.clean(mic.value, 'MIC').toUpperCase();
+        updateJobRow(j);
+        markDuplicates();
+      });
+      family.addEventListener('change', () => { family.value = j.family; });
+      mic.addEventListener('change', () => { mic.value = j.mic; });
+      check.addEventListener('change', syncRemoveBtn);
+      play.onclick = () => showJob(j, true);
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('input,button')) return;
+        selectRow(j);
+      });
+      j.ui = {
+        tr, family, mic, check, play,
+        out: cells[4].querySelector('.outpath'),
+        warn: cells[4].querySelector('.warn'),
+        waves: cells[5], stereo: cells[6], state: cells[7],
+      };
+    }
+    for (const j of jobs) updateJobRow(j);
+    markDuplicates();
+    syncRemoveBtn();
+  }
+
+  function updateJobRow(j) {
+    if (!j.ui) return;
+    const d = outDir(j);
+    j.ui.out.textContent = d ? d + '/' : '(zip root)';
+    j.ui.waves.textContent = j.result ? j.result.count : '';
+    j.ui.stereo.textContent = j.result ? j.result.stereo : '';
+    j.ui.state.textContent = j.state;
+    j.ui.state.style.color = j.state === 'done' ? 'var(--accent-2)'
+      : j.state === 'failed' ? 'var(--danger)' : 'var(--muted)';
+    j.ui.play.hidden = !j.result;
+  }
+
+  function selectRow(j) {
+    selected = j.id;
+    for (const x of jobs) if (x.ui) x.ui.tr.classList.toggle('sel', x === j);
+  }
+
+  /* ── auditions ───────────────────────────────────────────────────────── */
+  const auditions = new Map();
+
+  function registerAuditions(jobId, files) {
+    for (const [k, rec] of auditions) for (const u of rec.urls.values()) URL.revokeObjectURL(u);
+    const urls = new Map();
     for (const f of files) {
+      if (f.name) urls.set(f.name, URL.createObjectURL(new Blob([f.wav], { type: 'audio/wav' })));
+    }
+    auditions.set(jobId, { urls, rows: files });
+    while (auditions.size > PREVIEW_KEEP) {
+      const oldest = auditions.keys().next().value;
+      if (oldest === jobId) break;
+      for (const u of auditions.get(oldest).urls.values()) URL.revokeObjectURL(u);
+      auditions.delete(oldest);
+      if (currentJob && !auditions.has(currentJob)) { stopAll(); currentJob = null; }
+    }
+  }
+
+  function showJob(j, playFirst) {
+    if (!j.result) return;
+    selectRow(j);
+    const host = $('resRows');
+    host.textContent = '';
+    for (const f of j.result.files) {
       const tr = document.createElement('tr');
       const playable = !!f.name;
       tr.innerHTML =
-        `<td>${playable ? `<button class="playbtn" data-key="${esc(key)}" data-name="${esc(f.name)}">▶ play</button>` : ''}</td>` +
-        `<td><code>${esc(f.name || '—')}</code></td>` +
+        `<td>${playable ? `<button class="playbtn" data-key="${attr(j.id)}" data-name="${attr(f.name)}">▶ play</button>` : ''}</td>` +
+        `<td><code>${esc(f.name || 'skipped')}</code></td>` +
         `<td><span class="chip ${f.channels === 2 ? 'st' : ''}">${f.channels === 2 ? 'stereo' : 'mono'}</span></td>` +
         `<td class="num">${esc(f.wave)}</td>` +
         `<td><span class="grade g-${esc(f.grade)}">${esc(f.grade)}</span></td>` +
         `<td class="num">${f.peak == null ? '' : f.peak}</td>` +
         `<td style="color:var(--muted)">${esc(f.note)}</td>`;
       const btn = tr.querySelector('.playbtn');
-      if (btn) btn.onclick = () => playFromRegistry(key, btn);
+      if (btn) btn.onclick = () => playWave(j.id, btn);
       host.appendChild(tr);
     }
+    $('resWrap').hidden = false;
+    $('mapview').textContent = j.result.map;
+    $('mapDetails').open = true;
+    const first = host.querySelector('.playbtn');
+    if (playFirst && first) first.click();
   }
 
-  function playFromRegistry(key, btn) {
-    const rec = auditions.get(key);
+  function playWave(jobId, btn) {
+    const rec = auditions.get(jobId);
     if (!rec) return;
     const name = btn.dataset.name;
     const url = rec.urls.get(name);
     const f = rec.rows.find((r) => r.name === name);
     if (!url || !f) return;
-    const token = key + SEP + name;
+    const token = jobId + SEP + name;
     if (currentToken === token && !player.paused) { stopAll(); return; }
-    loadPreview(key, token, url, name, f.peak);
+    loadPreview(jobId, token, url, name, f.peak);
     for (const b of document.querySelectorAll('.playbtn')) b.classList.remove('on');
     btn.classList.add('on');
     player.play().catch(() => { /* autoplay policy */ });
+    rampIn();
   }
 
-  /* ── single file ─────────────────────────────────────────────────────── */
-  function guessSingle() {
-    const f = $('file').files[0];
-    if (!f) return;
-    const info = TCINaming.describe(f.name);
-    if (!$('mic').value) $('mic').value = info.mic;
-    if (!$('family').value) $('family').value = info.family;
-  }
-  $('file').addEventListener('change', guessSingle);
+  /* ── convert ─────────────────────────────────────────────────────────── */
+  $('cancel').onclick = () => { batchCancel = true; };
 
-  $('goSingle').onclick = async () => {
-    const f = $('file').files[0];
-    if (!f) { status($('stSingle'), 'Pick a .tci file first.', 'err'); return; }
-    guessSingle();
-    const family = clean($('family').value, 'Sample');
-    const mic = clean($('mic').value.toUpperCase(), 'MIC');
-    const btn = $('goSingle');
-    btn.disabled = true;
-    status($('stSingle'), `Decoding ${f.name}… (${human(f.size)})`);
-    try {
-      const j = await decodeInWorker(f, family, mic);
-      const key = 'single';
-      registerAuditions(key, j.files);
-      waveRows(key, j.files, $('resRows'));
-      $('resWrap').hidden = false;
-      $('mapview').textContent = j.map;
-      $('mapDetails').open = true;
-
-      const zip = new TCIZip.ZipWriter();
-      for (const wf of j.files) {
-        if (wf.name) await zip.add(wf.name, new Uint8Array(wf.wav));
-      }
-      await zip.addText('MAP.txt', j.map);
-      const url = URL.createObjectURL(zip.finish());
-      const a = $('dlSingle');
-      a.href = url;
-      a.download = `${family}_${mic}.zip`;
-      a.hidden = false;
-      status($('stSingle'), `${j.summary} — ${j.files.filter((x) => x.name).length} auditionable`, 'ok');
-    } catch (err) {
-      status($('stSingle'), 'Error: ' + err.message, 'err');
-    } finally {
-      btn.disabled = false;
-    }
-  };
-
-  /* ── batch folder ────────────────────────────────────────────────────── */
-  let batchCancel = false;
-
-  $('folder').addEventListener('change', () => {
-    const files = [...$('folder').files].filter((f) => /\.tci$/i.test(f.name));
-    const bytes = files.reduce((a, f) => a + f.size, 0);
-    $('batchPick').textContent = files.length
-      ? `${files.length} .tci · ${human(bytes)}` : 'no .tci files selected';
-    status($('stBatch'), files.length
-      ? (bytes > WARN_BYTES ? `That is a lot of data (${human(bytes)}). Decoding runs a couple of workers and may take several minutes; the tab stays usable.` : '')
-      : 'That folder has no .tci files.', files.length ? (bytes > WARN_BYTES ? '' : 'ok') : 'err');
-  });
-
-  $('cancelBatch').onclick = () => { batchCancel = true; };
-
-  $('goBatch').onclick = async () => {
-    const all = [...$('folder').files].filter((f) => /\.tci$/i.test(f.name));
-    if (!all.length) { status($('stBatch'), 'Pick a folder containing .tci files first.', 'err'); return; }
-
+  $('go').onclick = async () => {
+    if (!jobs.length) { status($('st'), 'Add a .tci file or folder first.', 'err'); return; }
     batchCancel = false;
-    const go = $('goBatch'), cancel = $('cancelBatch'), dl = $('dlBatch');
+    const go = $('go'), cancel = $('cancel'), dl = $('dl');
     go.disabled = true;
     cancel.hidden = false;
     dl.hidden = true;
-    $('barBatch').hidden = false;
-    $('batchTable').hidden = false;
+    $('bar').hidden = false;
     $('resWrap').hidden = true;
     $('resRows').textContent = '';
     $('mapview').textContent = '';
-    for (const u of [...auditions.values()]) for (const x of u.urls.values()) URL.revokeObjectURL(u);
-    auditions.clear();
     stopAll();
 
-    // root = the selected folder itself, so we can mirror its subfolders
-    const root = all[0].webkitRelativePath ? all[0].webkitRelativePath.split('/')[0] : '';
-    const jobs = all.map((file) => {
-      const rel = file.webkitRelativePath || file.name;
-      const info = TCINaming.describe(rel);
-      return { file, rel, info, dir: TCINaming.targetDir(info, root),
-               family: info.family, mic: info.mic };
-    });
-
     const zip = new TCIZip.ZipWriter();
-    const mapLines = ['# <folder>/<instrument>/<mic> <- wave, grade, peak, parse note'];
-    let done = 0, waves = 0, stereo = 0, failed = 0;
+    const map = [];
     const seenDirs = new Set();
+    let done = 0, waves = 0, stereo = 0, failed = 0;
     const t0 = performance.now();
+    const bar = $('bar').querySelector('i');
 
-    const bar = $('barBatch').querySelector('i');
-    const rows = $('batchRows');
-    rows.textContent = '';
-    const trs = jobs.map((j) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td><code>${esc(j.file.name)}</code></td>` +
-        `<td style="color:var(--muted)">${esc(j.dir ? j.dir + '/' : '')}${esc(j.family)}_${esc(j.mic)}</td>` +
-        `<td class="num"></td><td class="num"></td>` +
-        `<td style="color:var(--muted)">queued</td>` +
-        `<td><button class="playbtn" hidden>▶</button></td>`;
-      rows.appendChild(tr);
-      return tr;
-    });
+    for (const j of jobs) {
+      j.state = 'queued';
+      j.result = null;
+      updateJobRow(j);
+    }
 
-    status($('stBatch'), `Converting 0/${jobs.length}…`);
-
-    // Two files at a time; the ZIP only ever holds one decoded file at once.
     const queue = jobs.slice();
-    let active = 0;
     const runNext = async () => {
       while (queue.length && !batchCancel) {
-        active++;
         const job = queue.shift();
-        const tr = trs[jobs.indexOf(job)];
-        tr.children[4].textContent = 'decoding…';
+        job.state = 'decoding';
+        updateJobRow(job);
         try {
-          const j = await decodeInWorker(job.file, job.family, job.mic);
-          const key = job.dir + '' + job.file.name;
-          const dir = (job.dir ? job.dir + '/' : '');
-          if (!seenDirs.has(dir)) {
-            seenDirs.add(dir);
-            await zip.addText((dir || '') + 'README.txt',
-              `tci2wav export\nsource: ${job.rel}\n` +
-              `family: ${job.family}  mic: ${job.mic}\n${j.summary}\n`);
+          const r = await decodeOne(job.file, job.family, job.mic);
+          const dir = outDir(job);
+          const relDir = dir ? dir + '/' : '';
+          if (!seenDirs.has(relDir)) {
+            seenDirs.add(relDir);
+            await zip.addText(relDir + 'README.txt',
+              `tci2wav export\nsource: ${job.rel}\nfamily: ${job.family}  mic: ${job.mic}\n` +
+              `# ${r.summary}\n`);
           }
-          for (const wf of j.files) {
-            if (!wf.name) continue;
-            await zip.add(dir + wf.name, new Uint8Array(wf.wav));
+          const count = r.files.filter((f) => f.name).length;
+          const st = r.files.filter((f) => f.channels === 2 && f.name).length;
+          map.push(`# ${job.rel} :: ${r.summary}`);
+          for (const f of r.files) {
+            if (!f.name) { map.push(`-- ${relDir}${f.wave} [${f.grade}] ${f.note}`); continue; }
+            await zip.add(relDir + f.name, new Uint8Array(f.wav));
             waves++;
-            if (wf.channels === 2) stereo++;
-            mapLines.push(`${dir}${wf.name} <- ${wf.wave} [${wf.grade}] ` +
-              `${wf.channels === 2 ? 'st' : 'mono'} peak=${wf.peak} ${wf.note}`);
+            if (f.channels === 2) stereo++;
+            map.push(`${relDir}${f.name} <- ${f.wave} [${f.grade}] ` +
+              `${f.channels === 2 ? 'st' : 'mono'} peak=${f.peak} ${f.note}`);
           }
-          for (const wf of j.files) if (!wf.name) {
-            mapLines.push(`-- ${dir}${wf.wave} [${wf.grade}] ${wf.note}`);
-          }
-          mapLines.push(`# ${job.rel} :: ${j.summary}`);
-
-          registerAuditions(key, j.files);
-          waveRows(key, j.files, $('resRows'));
-          $('resWrap').hidden = false;
-          $('mapview').textContent = mapLines.join('\n');
-
-          const n = j.files.filter((x) => x.name).length;
-          const s2 = j.files.filter((x) => x.channels === 2).length;
-          tr.children[2].textContent = n;
-          tr.children[3].textContent = s2;
-          tr.children[4].textContent = 'done';
-          tr.children[4].style.color = 'var(--accent-2)';
-          const btn = tr.children[5].querySelector('.playbtn');
-          if (n) {
-            btn.hidden = false;
-            btn.onclick = () => { $('resWrap').hidden = false; playFromRegistry(key, btn); };
-            btn.title = 'Audition this instrument';
-          }
+          registerAuditions(job.id, r.files);
+          job.result = { files: r.files, map: map.join('\n') + '\n', count, stereo: st };
+          job.state = 'done';
+          if (!selected) showJob(job, false);
         } catch (err) {
           failed++;
-          tr.children[4].textContent = 'failed: ' + err.message;
-          tr.children[4].style.color = 'var(--danger)';
+          job.state = 'failed: ' + err.message;
         }
+        updateJobRow(job);
+        markDuplicates();
         done++;
         bar.style.width = ((done / jobs.length) * 100).toFixed(1) + '%';
         const secs = (performance.now() - t0) / 1000;
         const eta = done ? (secs / done) * (jobs.length - done) : 0;
-        status($('stBatch'),
-          `${batchCancel ? 'Cancelled' : 'Converting'} ${done}/${jobs.length} · ` +
-          `${waves} WAVs (${stereo} stereo)${failed ? ` · ${failed} failed` : ''}` +
-          (done < jobs.length ? ` · ~${eta < 60 ? Math.ceil(eta) + 's' : Math.ceil(eta / 60) + 'm'} left` : ''));
-        active--;
+        status($('st'),
+          `${batchCancel ? 'Cancelled' : 'Converting'} ${done}/${jobs.length} · ${waves} WAVs` +
+          `${stereo ? ` · ${stereo} stereo` : ''}${failed ? ` · ${failed} failed` : ''}` +
+          (done < jobs.length
+            ? ` · ${eta < 60 ? Math.ceil(eta) + 's' : Math.ceil(eta / 60) + 'm'} left`
+            : ''));
       }
     };
     await Promise.all([runNext(), runNext()]);
 
     if (done < jobs.length) {
-      status($('stBatch'), `Cancelled after ${done}/${jobs.length}. Nothing downloaded — remove the cancel to finish the run.`, 'err');
+      status($('st'), `Cancelled after ${done}/${jobs.length}. Nothing downloaded.`, 'err');
     } else {
-      await zip.addText('MAP.txt', mapLines.join('\n') + '\n');
-      const url = URL.createObjectURL(zip.finish());
-      dl.href = url;
-      dl.download = `${root || 'tci2wav'}_batch.zip`;
+      await zip.addText('MAP.txt', map.join('\n') + '\n');
+      dl.href = URL.createObjectURL(zip.finish());
+      dl.download = jobs.length === 1
+        ? `${jobs[0].family}_${jobs[0].mic}.zip`
+        : `${root || 'tci2wav'}_batch.zip`;
       dl.hidden = false;
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      status($('stBatch'),
-        `${jobs.length} TCIs → ${waves} WAVs (${stereo} stereo)` +
-        `${failed ? `, ${failed} failed` : ''} · ${human(zip.bytes)} zip · ${secs}s`,
-        failed ? '' : 'ok');
+      status($('st'),
+        `${jobs.length} file${jobs.length > 1 ? 's' : ''} → ${waves} WAVs` +
+        `${stereo ? ` (${stereo} stereo)` : ''}${failed ? `, ${failed} failed` : ''} · ` +
+        `${human(zip.bytes)} · ${secs}s`, failed ? '' : 'ok');
     }
-    $('barBatch').hidden = true;
+    $('bar').hidden = true;
     go.disabled = false;
     cancel.hidden = true;
   };

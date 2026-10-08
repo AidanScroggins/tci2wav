@@ -28,10 +28,10 @@ full reverse-engineering notes.
 
 ## Layout
 
-- `web/` — the browser app (GitHub Pages root): upload one `.tci` or a whole
-  folder, audition every converted wave with a safe volume control, and
-  download velocity-named WAVs + MAP.txt. Pure client-side JavaScript, no
-  server, no uploads.
+- `web/` — the browser app (GitHub Pages root): add one `.tci` or a whole
+  folder, edit the derived family/MIC per file, audition any converted wave
+  with a safe volume control, and download velocity-named WAVs + MAP.txt.
+  Pure client-side JavaScript, no server, no uploads.
   - `decode.js` / `solve.js` / `stereo.js` — container parsing, mono solver,
     stereo decoder
   - `zip.js` — streaming ZIP writer (deflate when it helps) so a folder run

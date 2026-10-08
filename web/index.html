@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tci2wav — Trigger 2 TCI exporter</title>
+<title>tci2wav: Trigger 2 TCI exporter</title>
 <style>
 :root{
   color-scheme:dark;
@@ -89,6 +89,20 @@ button.primary{color:#08101f;border:none;
 button.primary:hover:not(:disabled){filter:brightness(1.08)}
 button.ghost{background:transparent}
 .btnrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+.btnrow.tight{margin-top:10px;gap:8px}
+.btnrow.tight button{padding:5px 11px;font-size:12.5px}
+.srcgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.tblin{width:100%;min-width:74px;padding:4px 8px;font:inherit;font-size:12.5px;
+  color:var(--text);background:var(--panel-2);border:1px solid var(--line);
+  border-radius:6px}
+.tblin:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+.outpath{font:11.5px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--muted);overflow-wrap:anywhere;min-width:132px}
+.warn{color:var(--accent-3);font-size:11.5px}
+tr.sel{background:color-mix(in srgb,var(--accent) 11%,transparent)}
+tr.dup td{background:color-mix(in srgb,var(--accent-3) 9%,transparent)}
+.minibtn{padding:2px 8px;font-size:11.5px;border-radius:6px}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
 
 .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);
   border-radius:10px;padding:3px;gap:3px;margin-bottom:4px}
@@ -115,7 +129,8 @@ table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:14px}
 th,td{padding:6px 8px;text-align:left;vertical-align:middle;
   border-bottom:1px solid var(--line-soft)}
 th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;
-  letter-spacing:.05em;position:sticky;top:0;background:var(--panel)}
+  letter-spacing:.05em;position:sticky;top:0;background:var(--panel);white-space:nowrap}
+th.num{text-align:right}
 tbody tr:hover{background:color-mix(in srgb,var(--accent) 7%, transparent)}
 td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
 .tablewrap{max-height:420px;overflow:auto;border:1px solid var(--line-soft);
@@ -197,7 +212,7 @@ details[open] > summary::before{content:"▾ "}
 <header class="top">
   <div class="brand">
     <h1>tci2wav<span class="dot">.</span></h1>
-    <p class="tagline">Trigger&nbsp;2 <code>.tci</code> &rarr; velocity-named WAVs. Mono and stereo, V1/V2/Editor. Everything runs in your browser — no uploads.</p>
+    <p class="tagline">Trigger&nbsp;2 <code>.tci</code> &rarr; velocity-named WAVs. Mono and stereo, V1/V2/Editor. Runs in your browser.</p>
   </div>
   <div class="seg" role="tablist" aria-label="Colour theme">
     <button id="thDark" role="tab" aria-selected="true">Dark</button>
@@ -205,51 +220,46 @@ details[open] > summary::before{content:"▾ "}
   </div>
 </header>
 
-<!-- ───────────────────────── single file ───────────────────────── -->
+<!-- ───────────────────────── source + jobs ───────────────────────── -->
 <section class="card">
-  <h2>Single instrument</h2>
-  <p class="hint">Pick one <code>.tci</code>. Family and mic are guessed from the filename and can be overridden.</p>
-  <label for="file">TCI file (.tci)</label>
-  <input type="file" id="file" accept=".tci">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+  <h2>Source</h2>
+  <p class="hint">Add <code>.tci</code> files or a whole folder. One file and a library both work the same way.</p>
+  <div class="srcgrid">
     <div>
-      <label for="family">Sample family (e.g. ACKick)</label>
-      <input type="text" id="family" placeholder="guessed from filename">
+      <label for="files">Files</label>
+      <input type="file" id="files" accept=".tci" multiple>
     </div>
     <div>
-      <label for="mic">Mic type (e.g. Z3, NRG)</label>
-      <input type="text" id="mic" placeholder="guessed from filename">
+      <label for="folder">Folder</label>
+      <input type="file" id="folder" webkitdirectory directory multiple>
     </div>
   </div>
   <div class="btnrow">
-    <button class="primary" id="goSingle">Convert</button>
-    <a id="dlSingle" download hidden><button class="ghost" type="button">Download ZIP</button></a>
+    <button class="primary" id="go">Convert</button>
+    <button id="cancel" hidden>Cancel</button>
+    <button id="clear" class="ghost" hidden>Clear</button>
+    <a id="dl" download hidden><button class="ghost" type="button">Download ZIP</button></a>
+    <span class="chip" id="pickChip"></span>
   </div>
-  <div class="status" id="stSingle"></div>
+  <div class="status" id="st"></div>
+  <div class="bar" id="bar" hidden><i></i></div>
 </section>
 
-<!-- ───────────────────────── batch folder ───────────────────────── -->
 <section class="card">
-  <h2>Batch — whole folder</h2>
-  <p class="hint">
-    Select a library folder (or any set of files). Every <code>.tci</code> is converted in turn and
-    filed into <code>&lt;Category&gt;/&lt;Instrument&gt;/&lt;MIC&gt;/</code> inside one ZIP, matching the
-    Python CLI. Preview stays available for the instruments processed most recently.
-  </p>
-  <label for="folder">Folder or files</label>
-  <input type="file" id="folder" webkitdirectory directory multiple>
-  <div class="btnrow">
-    <button class="primary" id="goBatch">Convert folder</button>
-    <button id="cancelBatch" hidden>Cancel</button>
-    <a id="dlBatch" download hidden><button class="ghost" type="button">Download ZIP</button></a>
-    <span class="chip" id="batchPick"></span>
+  <h2>Jobs</h2>
+  <p class="hint">Family and MIC come from the path. Edit either one to rename; the output path updates as you type.</p>
+  <div class="btnrow tight">
+    <button id="rederive">Re-derive names</button>
+    <button id="removeSel" hidden>Remove selected</button>
   </div>
-  <div class="status" id="stBatch"></div>
-  <div class="bar" id="barBatch" hidden><i></i></div>
-  <div class="tablewrap" id="batchTable" hidden>
+  <div class="tablewrap" id="jobWrap" hidden>
     <table>
-      <thead><tr><th>File</th><th>Instrument / MIC</th><th>Waves</th><th>Stereo</th><th>State</th><th></th></tr></thead>
-      <tbody id="batchRows"></tbody>
+      <thead><tr>
+        <th style="width:26px"><input type="checkbox" id="checkAll" aria-label="Select all"></th>
+        <th>File</th><th>Family</th><th>MIC</th><th>Output path</th>
+        <th class="num">Waves</th><th class="num">Stereo</th><th>State</th><th></th>
+      </tr></thead>
+      <tbody id="jobRows"></tbody>
     </table>
   </div>
 </section>
@@ -257,14 +267,14 @@ details[open] > summary::before{content:"▾ "}
 <!-- ───────────────────────── preview + results ───────────────────────── -->
 <section class="card">
   <h2>Preview &amp; results</h2>
-  <p class="hint">Every converted wave can be auditioned here. The slider only affects preview — exported files are never modified.</p>
+  <p class="hint">Any converted wave can be auditioned. Preview gain does not affect exports.</p>
 
   <div class="preview">
     <div style="flex:2 1 340px;min-width:260px">
       <audio id="player" controls preload="none"></audio>
       <div class="volrow" style="margin-top:8px">
         <span id="nowPlaying">Nothing loaded</span>
-        <span>peak <b id="peakDb">—</b></span>
+        <span>peak <b id="peakDb">n/a</b></span>
       </div>
       <div class="peak"><i id="peakBar"></i></div>
     </div>
@@ -297,17 +307,16 @@ details[open] > summary::before{content:"▾ "}
   <strong>Grading.</strong>
   <div class="legend">
     <span><span class="grade g-A">A</span> exact &amp; smooth</span>
-    <span><span class="grade g-B">B</span> close / stereo</span>
+    <span><span class="grade g-B">B</span> close, or stereo</span>
     <span><span class="grade g-C">C</span> verify by ear</span>
     <span><span class="grade g-X">X</span> skipped</span>
   </div>
   <p style="margin:12px 0 0">
-    <strong>Naming.</strong> <code>FAMILY_MIC_V##_RR#.wav</code> — V is velocity by attack peak, RR is the
-    round robin inside a velocity group.
+    <strong>Naming.</strong> <code>FAMILY_MIC_V##_RR#.wav</code>. V is velocity by attack peak, RR is the round robin within a level.
   </p>
   <p style="margin:8px 0 0">
-    <strong>Stereo.</strong> The tail decodes exactly; the ~2&nbsp;ms attack head uses a path that is not
-    cracked yet, so those frames are silent and the count is reported per file in MAP.txt.
+    <strong>Stereo.</strong> Tails decode exactly. The first ~2&nbsp;ms uses an undecoded path and is left
+    silent. MAP.txt lists how many frames.
   </p>
   <p style="margin:8px 0 0">
     Method: <a href="https://github.com/AidanScroggins/tci2wav/blob/main/WRITEUP.md">WRITEUP.md</a>

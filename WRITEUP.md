@@ -174,20 +174,26 @@ of table lookup.
 ## 6. Web app
 
 - Dark by default, light on request, remembered in `localStorage`.
-- **Preview.** Every exported wave is auditionable from the results table (and
-  from the batch queue's per-file button). Preview only ever touches
-  `<audio>.volume`, so exports stay bit-exact. Defaults to 35% (-9.1 dBFS)
-  because decoded drum transients routinely hit full scale, and ramps in over
-  25 ms so a full-scale attack does not click. The panel shows each sample's
-  peak in dBFS and flags anything at or above -0.2 dBFS.
-- **Batch.** `<input webkitdirectory>` takes a library folder; each `.tci` is
-  decoded in a small worker pool and streamed into one ZIP as
-  `<Category>/<Instrument>/<MIC>/`, matching the Python CLI. Progress, ETA,
-  per-file status and a cancel button; failed files are reported, never fatal.
+- **One queue for everything.** Adding a single file or a whole folder both
+  produce a list of jobs, so "one instrument" and "a library" are the same code
+  path with a different row count. Each job carries its own editable `family`
+  and `mic`, guessed from the path via `naming.js` and overridable per file
+  (`Re-derive names` restores the guesses). The output path updates live as
+  those fields change, and two jobs aimed at the same output path are flagged
+  instead of silently overwriting each other in the ZIP.
+- **Preview.** Any converted wave is auditionable from the results table, or
+  from the job row. Preview only touches `<audio>.volume`, so exports stay
+  bit-exact. Defaults to 35% (-9.1 dBFS) because drum transients routinely hit
+  full scale, and ramps in over 25 ms so the attack does not click. The panel
+  shows peak in dBFS and warns at or above -0.2 dBFS.
+- **Conversion.** A two-worker pool keeps two files in flight; entries stream
+  into one ZIP as `<Category>/<Instrument>/<MIC>/`, the same tree the Python CLI
+  writes. A file with no folder of its own lands flat in the ZIP root.
   `zip.js` appends one entry at a time (deflate when it shrinks, store
   otherwise) so a multi-gigabyte run never materialises the whole archive, and
-  only the six most recent instruments keep their audio buffers alive for
-  previewing.
+  only the six most recent jobs keep audio buffers alive for previewing.
+  Progress, ETA, per-job state, cancel, and failures reported rather than
+  fatal.
 
 ## 7. Verification
 
