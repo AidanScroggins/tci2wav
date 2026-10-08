@@ -34,8 +34,12 @@ from stereo import decode_stereo
 from tci_decode import (apply_voice_rule, bits_of, decode_blocks, decode_wave,
                         export_stereo_wav, export_wav, sm24)
 
-LIB = '/Users/aidan/Documents/Trigger2Library'
-OUT = f'{LIB}/TCI-Exports'
+# Library locations are machine specific, so nothing here is hardcoded: point
+# TCI2WAV_LIB at your Trigger 2 library (it must contain the "Trigger2 Kicks",
+# "Trigger2 Snares", ... folders) and optionally TCI2WAV_OUT at a write target.
+# The batch tools also accept --lib / --out on the command line.
+LIB = os.environ.get('TCI2WAV_LIB') or os.path.expanduser('~/Trigger2Library')
+OUT = os.environ.get('TCI2WAV_OUT') or os.path.join(LIB, 'TCI-Exports')
 CATS = {'Kicks': 'Trigger2 Kicks', 'Snares': 'Trigger2 Snares',
         'Toms': 'Trigger2 Toms', 'Deluxe': 'Trigger2 Deluxe'}
 
@@ -280,10 +284,32 @@ def render_tci(path, outdir):
     return report
 
 
+def parse_args(argv, usage=None):
+    """Split --lib/--out flags from the positional filename filters."""
+    flt, lib, out = [], None, None
+    it = iter(range(len(argv)))
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '--lib' and i + 1 < len(argv):
+            lib = argv[i + 1]; i += 2
+        elif a == '--out' and i + 1 < len(argv):
+            out = argv[i + 1]; i += 2
+        elif a in ('-h', '--help'):
+            sys.exit(usage or __doc__)
+        else:
+            flt.append(a); i += 1
+    return flt, lib, out
+
+
 def main(flt):
+    global LIB, OUT
+    if not os.path.isdir(LIB):
+        sys.exit(f'Trigger 2 library not found at {LIB!r}.\n'
+                 f'Pass --lib /path/to/library or set TCI2WAV_LIB.')
     jobs = []
     for cat, sub in CATS.items():
-        root = f'{LIB}/{sub}'
+        root = os.path.join(LIB, sub)
         if not os.path.isdir(root):
             continue
         for inst in sorted(os.listdir(root)):
@@ -296,9 +322,9 @@ def main(flt):
                 if flt and not any(f.lower() in (inst + ' ' + fn).lower() for f in flt):
                     continue
                 jobs.append((cat, inst, f'{idir}/{fn}'))
-    print(f'{len(jobs)} TCIs queued', flush=True)
+    print(f'{len(jobs)} TCIs queued -> {OUT}', flush=True)
     for cat, inst, path in jobs:
-        outdir = f'{OUT}/{cat}/{inst}/{mic_of(os.path.basename(path))}'
+        outdir = os.path.join(OUT, cat, inst, mic_of(os.path.basename(path)))
         print(f'--- {cat}/{inst} :: {os.path.basename(path)}', flush=True)
         try:
             rep = render_tci(path, outdir)
@@ -310,4 +336,10 @@ def main(flt):
 
 
 if __name__ == '__main__':
-    main([a for a in sys.argv[1:]])
+    _flt, _lib, _out = parse_args(sys.argv[1:])
+    if _lib:
+        LIB = _lib
+        OUT = os.path.join(_lib, 'TCI-Exports')
+    if _out:
+        OUT = _out
+    main(_flt)

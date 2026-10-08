@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const D = require('../decode.js');
 const S = require('../solve.js');
 const ST = require('../stereo.js');
+const Z = require('../zip.js');
+const NM = require('../naming.js');
 const E = require('../export.js');
 
 function bitsToBytes(bitstr) {
@@ -402,4 +404,140 @@ test('exportWaves: mono and stereo waves report their own channel count', async 
   assert.equal(stOut.files[0].channels, 2);
   assert.equal(new DataView(stOut.files[0].wav.buffer).getUint16(22, true), 2);
   assert.equal(stOut.files[0].wav.length, 44 + 203 * 6);
+});
+
+/* ── streaming ZIP writer ─────────────────────────────────────────────── */
+
+// Read back a zip we just wrote: parse the central directory and pull entries
+// out with the platform inflater, so the test does not depend on our own code.
+async function readZip(blob) {
+  const u8 = new Uint8Array(await blob.arrayBuffer());
+  const dv = new DataView(u8.buffer);
+  const dec = new TextDecoder();
+  // end-of-central-directory is the last 22 bytes for a non-zip64 archive
+  let eocd = u8.length - 22;
+  while (eocd >= 0 && dv.getUint32(eocd, true) !== 0x06054b50) eocd--;
+  assert.ok(eocd >= 0, 'EOCD record found');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = new Map();
+  for (let i = 0; i < count; i++) {
+    assert.equal(dv.getUint32(p, true), 0x02014b50, 'central header signature');
+    const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
+    const csize = dv.getUint32(p + 20, true);
+    const usize = dv.getUint32(p + 24, true);
+    const nlen = dv.getUint16(p + 28, true);
+    const elen = dv.getUint16(p + 30, true);
+    const clen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    assert.equal(dv.getUint32(lho, true), 0x04034b50, 'local header signature');
+    const lnlen = dv.getUint16(lho + 26, true);
+    assert.equal(dec.decode(u8.subarray(lho + 30, lho + 30 + lnlen)), name,
+      'local and central names agree');
+    const start = lho + 30 + lnlen + dv.getUint16(lho + 28, true);
+    const body = u8.subarray(start, start + csize);
+    let data;
+    if (method === 0) {
+      data = body;
+    } else {
+      assert.equal(method, 8, 'only store/deflate');
+      const ds = new DecompressionStream('deflate-raw');
+      data = new Uint8Array(await new Response(
+        new Blob([body]).stream().pipeThrough(ds)).arrayBuffer());
+    }
+    assert.equal(data.length, usize, `${name}: uncompressed size`);
+    assert.equal(Z.crc32(data), crc, `${name}: CRC32`);
+    out.set(name, data);
+    p += 46 + nlen + elen + clen;
+  }
+  return out;
+}
+
+test('zip: entries round-trip through store and deflate', async () => {
+  const z = new Z.ZipWriter();
+  await z.add('Kicks/ACKick/NRG/a.wav', new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+  await z.addText('MAP.txt', 'name <- wave00 [A] mono\n');
+  const big = new Uint8Array(70000).fill(65);
+  await z.add('Kicks/repetitive.bin', big);
+  await z.addText('Snares/Snöré/notes ünicode.txt', 'unicode ✓');
+  const files = await readZip(z.finish());
+  assert.deepEqual([...files.keys()], [
+    'Kicks/ACKick/NRG/a.wav', 'MAP.txt', 'Kicks/repetitive.bin',
+    'Snares/Snöré/notes ünicode.txt']);
+  assert.deepEqual([...files.get('Kicks/ACKick/NRG/a.wav')], [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(files.get('MAP.txt').length, 'name <- wave00 [A] mono\n'.length);
+  assert.equal(files.get('Kicks/repetitive.bin').length, 70000);
+  assert.equal(files.get('Snares/Snöré/notes ünicode.txt').length,
+    new TextEncoder().encode('unicode ✓').length);
+});
+
+test('zip: tiny entries are stored so deflate cannot inflate them', async () => {
+  const z = new Z.ZipWriter();
+  await z.add('small.bin', new Uint8Array([9, 9, 9]));
+  await z.add('big.bin', new Uint8Array(5000).fill(0));
+  const blob = z.finish();
+  const files = await readZip(blob);
+  assert.equal(files.get('small.bin').length, 3);
+  assert.equal(files.get('big.bin').length, 5000);
+  assert.ok(blob.size < 5000, 'the compressible entry actually shrank');
+});
+
+test('zip: crc32 matches zlib for the classic check values', () => {
+  // values cross-checked against python3 -c "import zlib; print(zlib.crc32(b'123'))"
+  assert.equal(Z.crc32(new Uint8Array(0)), 0);
+  assert.equal(Z.crc32(new Uint8Array([0x31, 0x32, 0x33])), 0x884863d2);
+  assert.equal(Z.crc32(new Uint8Array([0xff])), 0xff000000);
+});
+
+test('zip: finished archive is stable and refuses further adds', async () => {
+  const z = new Z.ZipWriter();
+  await z.addText('a.txt', 'a');
+  const first = await z.finish().arrayBuffer();
+  const again = await z.finish().arrayBuffer();   // must not append the dir twice
+  assert.deepEqual([...new Uint8Array(first)], [...new Uint8Array(again)]);
+  await assert.rejects(() => z.add('b.txt', new Uint8Array([1])), /already finished/);
+});
+
+/* ── batch path/naming rules ──────────────────────────────────────────── */
+
+test('naming: library paths take family from the folder, mic from the file', () => {
+  const d = NM.describe('Trigger2 Kicks/ACKick/ACKick NRG.tci');
+  assert.equal(d.family, 'ACKick');
+  assert.equal(d.mic, 'NRG');
+  assert.equal(d.dir, 'Trigger2 Kicks/ACKick');
+  // spaces in instrument folder names must not leak into the filename
+  const t = NM.describe('Trigger2 Toms/Birch Tom3/BirchTom 3 SSDR.tci');
+  assert.equal(t.family, 'BirchTom3');
+  assert.equal(t.mic, 'SSDR');
+  assert.equal(t.dir, 'Trigger2 Toms/Birch Tom3');
+});
+
+test('naming: a bare filename still yields a family and mic', () => {
+  const d = NM.describe('ACKick Z3.tci');
+  assert.equal(d.family, 'ACKick');
+  assert.equal(d.mic, 'Z3');
+  assert.equal(d.dir, '');
+  const one = NM.describe('weird.tci');
+  assert.equal(one.family, 'weird');
+  assert.equal(one.mic, 'MIC', 'falls back rather than producing an empty name');
+});
+
+test('naming: clean strips characters that break filenames', () => {
+  assert.equal(NM.clean('Birch Tom 3', 'x'), 'BirchTom3');
+  assert.equal(NM.clean('a/b\\c:d', 'x'), 'abcd');
+  assert.equal(NM.clean('', 'fallback'), 'fallback');
+  assert.equal(NM.clean('   ', 'fallback'), 'fallback');
+});
+
+test('naming: targetDir is <tree minus root>/MIC, like the Python CLI', () => {
+  const info = NM.describe('Trigger2Library/Trigger2 Kicks/ACKick/ACKick NRG.tci');
+  assert.equal(NM.targetDir(info, 'Trigger2Library'), 'Trigger2 Kicks/ACKick/NRG');
+  assert.equal(NM.targetDir(info, ''), 'Trigger2Library/Trigger2 Kicks/ACKick/NRG');
+  // a root that does not prefix the path is left alone
+  assert.equal(NM.targetDir(info, 'SomethingElse'), 'Trigger2Library/Trigger2 Kicks/ACKick/NRG');
+  // no folder hierarchy at all: just the MIC
+  assert.equal(NM.targetDir(NM.describe('ACKick Z3.tci'), 'a'), 'Z3');
+  assert.equal(NM.targetDir(NM.describe('a.tci'), 'a'), 'MIC');
 });

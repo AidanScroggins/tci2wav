@@ -27,7 +27,12 @@ adjacent levels with peak ratio < 1.12 share a velocity (round robins).
 Documented assumption: validated on ACKick Z3 (matches DAW hit order
 within +-2; peak clusters align exactly).
 
-Usage: python3 tci_export.py [filter ...]   (same filters as render_library.py)
+Usage: python3 tci_export.py [--lib DIR] [--out DIR] [filter ...]
+
+--lib points at your Trigger 2 library (env: TCI2WAV_LIB, default
+~/Trigger2Library); --out at the write target (env: TCI2WAV_OUT, default
+<library>/TCI-Exports). Remaining arguments are filename filters, same as
+render_library.py.
 """
 
 import os
@@ -39,10 +44,12 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tci_decode import (apply_voice_rule, decode_wave, export_stereo_wav,
                         export_wav)
-from render_library import CATS, LIB, parse_v2, solve_wave
+from render_library import CATS, LIB, parse_args, parse_v2, solve_wave
 from stereo import decode_stereo
 
-OUT = f'{LIB}/TCI-Exports'
+# See render_library for the TCI2WAV_LIB / TCI2WAV_OUT convention; both are
+# overridable with --lib / --out.
+OUT = os.environ.get('TCI2WAV_OUT') or os.path.join(LIB, 'TCI-Exports')
 RR_RATIO = 1.12
 ATK_N = 5000
 
@@ -230,9 +237,13 @@ def export_tci(path, outdir, family, mic):
 
 
 def main(flt):
+    global LIB, OUT
+    if not os.path.isdir(LIB):
+        sys.exit(f'Trigger 2 library not found at {LIB!r}.\n'
+                 f'Pass --lib /path/to/library or set TCI2WAV_LIB.')
     jobs = []
     for cat, sub in CATS.items():
-        root = f'{LIB}/{sub}'
+        root = os.path.join(LIB, sub)
         if not os.path.isdir(root):
             continue
         for inst in sorted(os.listdir(root)):
@@ -247,9 +258,9 @@ def main(flt):
                 mic = os.path.splitext(fn)[0].split()[-1].upper()
                 family = inst.replace(' ', '')
                 jobs.append((cat, inst, f'{idir}/{fn}', family, mic))
-    print(f'{len(jobs)} TCIs queued', flush=True)
+    print(f'{len(jobs)} TCIs queued -> {OUT}', flush=True)
     for cat, inst, path, family, mic in jobs:
-        outdir = f'{OUT}/{cat}/{inst}/{mic}'
+        outdir = os.path.join(OUT, cat, inst, mic)
         print(f'--- {family}_{mic} :: {os.path.basename(path)}', flush=True)
         try:
             for fn, g, _n in export_tci(path, outdir, family, mic):
@@ -259,4 +270,10 @@ def main(flt):
 
 
 if __name__ == '__main__':
-    main([a for a in sys.argv[1:]])
+    _flt, _lib, _out = parse_args(sys.argv[1:], usage=__doc__)
+    if _lib:
+        LIB = _lib
+        OUT = os.path.join(_lib, 'TCI-Exports')
+    if _out:
+        OUT = _out
+    main(_flt)

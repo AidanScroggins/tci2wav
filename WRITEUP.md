@@ -171,12 +171,33 @@ of table lookup.
   remaining gap (needs lldb logging once headless AU triggering works,
   or a caller-dataflow dive).
 
-## 6. Verification
+## 6. Web app
+
+- Dark by default, light on request, remembered in `localStorage`.
+- **Preview.** Every exported wave is auditionable from the results table (and
+  from the batch queue's per-file button). Preview only ever touches
+  `<audio>.volume`, so exports stay bit-exact. Defaults to 35% (-9.1 dBFS)
+  because decoded drum transients routinely hit full scale, and ramps in over
+  25 ms so a full-scale attack does not click. The panel shows each sample's
+  peak in dBFS and flags anything at or above -0.2 dBFS.
+- **Batch.** `<input webkitdirectory>` takes a library folder; each `.tci` is
+  decoded in a small worker pool and streamed into one ZIP as
+  `<Category>/<Instrument>/<MIC>/`, matching the Python CLI. Progress, ETA,
+  per-file status and a cancel button; failed files are reported, never fatal.
+  `zip.js` appends one entry at a time (deflate when it shrinks, store
+  otherwise) so a multi-gigabyte run never materialises the whole archive, and
+  only the six most recent instruments keep their audio buffers alive for
+  previewing.
+
+## 7. Verification
 
 - `web/stereo.js` and `py/stereo.py` are two independent implementations of
   the decoder. They agree **byte for byte** on the L/R sample data, and the
   web app and the Python CLI agree byte for byte on exported WAVs and
   `MAP.txt` (44/44 files across stereo and mono instruments).
 - Full library: 3902 stereo waves, all decoded, 0 clipped samples.
+- `web/zip.js` archives were parsed back with python `zipfile`: CRCs match,
+  deflate and store entries both inflate, folders and UTF-8 names round-trip.
 - JS: `node --test web/tests` (parity harness; hashes only, no audio in repo).
-  Python: `python3 py/tci_export.py "ACKick"` for a single-instrument check.
+  Python: `python3 py/tci_export.py --lib /path/to/library "ACKick"` for a
+  single-instrument check.

@@ -1,10 +1,17 @@
-"""Render + verify waves from a TCI using proven struct specs.
+"""Render + verify waves from a TCI using known-good struct specs.
+
+The specs below were solved offline and are pinned here so a decoder change
+can be re-checked bit-exactly against them. Verification (the kick mode)
+correlates each rendered wave against a ground-truth layered render that you
+supply; without it you only get the rendered WAVs.
 
 Usage:
-  python3 render_tci.py kick   # ACKick Z3: render 12 waves, verify vs layers
-  python3 render_tci.py snare  # SlateSnare Z3: render 20 waves (structural drafts)
+  python3 render_tci.py kick <ACKick Z3.tci> <ACKickZ3_layers.wav> [outdir]
+  python3 render_tci.py kick-noverify <ACKick Z3.tci> [outdir]
+  python3 render_tci.py snare <SlateSnare Z3.tci> [outdir]
 
-Edit PATHS below for your machine. Needs numpy.
+No paths are hardcoded: pass the .tci files (and the reference WAV for
+verification) on the command line. Needs numpy.
 Decoder lives in tci_decode.py (same folder).
 """
 
@@ -14,11 +21,6 @@ import sys
 import numpy as np
 
 from tci_decode import (apply_voice_rule, decode_wave, export_wav, parse_tci)
-
-KICK_TCI = '/Users/aidan/Downloads/TCI Crack - v2 (ACKick Z3)/ACKick Z3.tci'
-KICK_REF = '/Users/aidan/Documents/Trigger2Library/ACKickZ3_layers.wav'
-SNARE_TCI = '/Users/aidan/Documents/Trigger2Library/Trigger2 Snares/SlatesSnare/SlateSnare Z3.tci'
-OUT = '/Users/aidan/Documents/Trigger2Library/V2_DECODED_SM'
 
 # Wave hit onsets in ACKickZ3_layers.wav (mono 24-bit), in order, samples.
 KICK_ONSETS = [3, 132303, 264603, 396903, 529203, 661503, 793802, 926101,
@@ -94,42 +96,59 @@ def fft_corr(vec, ref):
     return float(nc[bi]), bi
 
 
-def render_kick(verify=True):
-    tci = parse_tci(KICK_TCI)
-    ref = read_mono24(KICK_REF) if verify else None
-    os.makedirs(OUT, exist_ok=True)
+def render_kick(tci_path, outdir, ref_path=None):
+    tci = parse_tci(tci_path)
+    ref = read_mono24(ref_path) if ref_path else None
+    os.makedirs(outdir, exist_ok=True)
+    tag = os.path.splitext(os.path.basename(tci_path))[0].replace(' ', '')
     for i, wv in enumerate(tci['waves']):
         vec = apply_voice_rule(decode_wave(wv['blob'], wv['frames'], KICK_STRUCTS[i]),
                                wv['frames'])
-        fn = f'{OUT}/ACKickZ3_wave{i:02d}_{wv["frames"]}fr_sm.wav'
+        fn = f'{outdir}/{tag}_wave{i:02d}_{wv["frames"]}fr_sm.wav'
         export_wav(fn, vec)
         msg = f'w{i}: n={len(vec)} peak={int(np.abs(vec).max())}'
-        if verify:
+        if ref is not None:
             o = KICK_ONSETS[KICK_HITS[i]]
             c, lag = fft_corr(vec * 2 ** -12, ref[o:o + 60000])
             msg += f' corr={c:.5f} lag={lag}'
         print(msg, flush=True)
 
 
-def render_snare():
-    tci = parse_tci(SNARE_TCI)
-    outdir = f'{OUT}/SlateSnareZ3'
+def render_snare(tci_path, outdir):
+    tci = parse_tci(tci_path)
     os.makedirs(outdir, exist_ok=True)
+    tag = os.path.splitext(os.path.basename(tci_path))[0].replace(' ', '')
     for i, wv in enumerate(tci['waves']):
         vec = apply_voice_rule(decode_wave(wv['blob'], wv['frames'], SNARE_STRUCTS[i]),
                                wv['frames'])
-        fn = f'{outdir}/SlateSnareZ3_wave{i:02d}_{wv["frames"]}fr.wav'
+        fn = f'{outdir}/{tag}_wave{i:02d}_{wv["frames"]}fr.wav'
         export_wav(fn, vec)
         print(f'w{i}: n={len(vec)} peak={int(np.abs(vec).max())}', flush=True)
 
 
+USAGE = ('usage: render_tci.py kick <tci> <reference.wav> [outdir]\n'
+         '       render_tci.py kick-noverify <tci> [outdir]\n'
+         '       render_tci.py snare <tci> [outdir]')
+
 if __name__ == '__main__':
-    which = sys.argv[1] if len(sys.argv) > 1 else 'kick'
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ('-h', '--help'):
+        sys.exit(__doc__ + '\n' + USAGE)
+    which, args = argv[0], argv[1:]
     if which == 'kick':
-        render_kick(verify=True)
+        if len(args) < 2:
+            sys.exit('kick mode needs <tci> and <reference.wav>\n' + USAGE)
+        out = args[2] if len(args) > 2 else os.path.join(os.getcwd(), 'render_tci_out')
+        render_kick(args[0], out, args[1])
     elif which == 'kick-noverify':
-        render_kick(verify=False)
+        if not args:
+            sys.exit('kick-noverify needs <tci>\n' + USAGE)
+        out = args[1] if len(args) > 1 else os.path.join(os.getcwd(), 'render_tci_out')
+        render_kick(args[0], out)
     elif which == 'snare':
-        render_snare()
+        if not args:
+            sys.exit('snare needs <tci>\n' + USAGE)
+        out = args[1] if len(args) > 1 else os.path.join(os.getcwd(), 'render_tci_out')
+        render_snare(args[0], out)
     else:
-        sys.exit('usage: render_tci.py [kick|kick-noverify|snare]')
+        sys.exit(USAGE)

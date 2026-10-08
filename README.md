@@ -5,7 +5,7 @@ This app is 100% vibe-coded. I am not a programmer, just an audio enthusiast loo
 
 Decode Steven Slate Trigger 2 `.tci` sample files — V1 and V2, mono and
 stereo — in your browser or on the command line, and export
-velocity-named WAVs.
+velocity-named WAVs. Batch mode takes a whole library folder.
 
 **Live app:** `https://AidanScroggins.github.io/tci2wav/` (static site, works
 offline; your files never leave your machine)
@@ -28,9 +28,17 @@ full reverse-engineering notes.
 
 ## Layout
 
-- `web/` — the browser app (GitHub Pages root): upload a V1/V2/Editor `.tci`
-  (mono or stereo), download a ZIP of velocity-named WAVs + MAP.txt. Pure
-  client-side JavaScript, no server, no uploads.
+- `web/` — the browser app (GitHub Pages root): upload one `.tci` or a whole
+  folder, audition every converted wave with a safe volume control, and
+  download velocity-named WAVs + MAP.txt. Pure client-side JavaScript, no
+  server, no uploads.
+  - `decode.js` / `solve.js` / `stereo.js` — container parsing, mono solver,
+    stereo decoder
+  - `zip.js` — streaming ZIP writer (deflate when it helps) so a folder run
+    never holds the whole export in memory
+  - `naming.js` — folder path → family / mic / output directory rules
+  - `export.js` / `worker.js` / `app.js` — WAV + MAP output, off-thread decode,
+    UI
 - `py/` — the reference Python toolkit (needs numpy): core decoder,
   structural mono solver, stereo tail decoder, batch + unified exporters, and
   the original local web app.
@@ -41,10 +49,16 @@ full reverse-engineering notes.
 
 ```sh
 pip install numpy
-python3 py/tci_export.py "ACKick Z3"   # V/RR-named WAVs + MAP.txt per mic folder
+export TCI2WAV_LIB=/path/to/Trigger2Library   # or pass --lib
+python3 py/tci_export.py --lib /path/to/library "ACKick Z3"   # V/RR-named WAVs + MAP.txt
 python3 py/tci_web.py                  # original local server version
 node --test web/tests                  # JS parity harness (hashes, no audio in repo)
 ```
+
+No file paths are baked into the repo. `TCI2WAV_LIB` points at your Trigger 2
+library (default `~/Trigger2Library`) and `TCI2WAV_OUT` at the write target
+(default `<library>/TCI-Exports`); both tools also take `--lib DIR` and
+`--out DIR`. The browser app needs neither — it decodes entirely client-side.
 
 ## IP note
 

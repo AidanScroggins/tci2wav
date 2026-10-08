@@ -1,57 +1,327 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tci2wav — Trigger 2 TCI exporter</title>
 <style>
-body{font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#222}
-h1{font-size:24px}.card{border:1px solid #ddd;border-radius:10px;padding:20px;margin:16px 0}
-label{display:block;margin:10px 0 4px;font-weight:600}
-input[type=text]{width:100%;padding:8px;font-size:15px;box-sizing:border-box}
-button{padding:10px 22px;font-size:15px;margin-top:14px;cursor:pointer}
-table{border-collapse:collapse;width:100%;font-size:13px;margin-top:12px}
-th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top}
-th{background:#f5f5f5}.grade{display:inline-block;min-width:22px;text-align:center;
-font-weight:700;border-radius:4px;padding:1px 6px}
-.A{background:#d9f2dd}.B{background:#fff3c4}.C{background:#ffe0cc}.X{background:#f3c1c1}
-#status{margin-top:12px;color:#555}#dl{margin-top:12px;display:none}
-#mapview{white-space:pre-wrap;font-family:monospace;font-size:12px;background:#f7f7f7;
-border-radius:8px;padding:12px;margin-top:12px;max-height:300px;overflow:auto}
-code{background:#f4f4f4;padding:1px 5px;border-radius:4px}
-.foot{font-size:13px;color:#555}
+:root{
+  color-scheme:dark;
+  --bg:#0b0f17; --bg-grad-a:#131a2b; --bg-grad-b:#0b0f17;
+  --panel:#121826; --panel-2:#182033; --panel-3:#1f2940;
+  --line:#28324a; --line-soft:#1e2639;
+  --text:#e7ecf5; --muted:#8d9ab5; --faint:#5f6b85;
+  --accent:#7aa2ff; --accent-2:#4fe0b0; --accent-3:#ffb454; --accent-4:#c792ea;
+  --danger:#ff6b81;
+  --g-a:#4fe0b0; --g-b:#ffb454; --g-c:#ff8fb1; --g-x:#ff6b81;
+  --ring:0 0 0 3px rgba(122,162,255,.30);
+  --radius:14px; --radius-sm:9px;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
+}
+html[data-theme=light]{
+  color-scheme:light;
+  --bg:#f6f7fb; --bg-grad-a:#eef1fb; --bg-grad-b:#f9fafc;
+  --panel:#ffffff; --panel-2:#f4f6fc; --panel-3:#eaeff9;
+  --line:#dbe1ee; --line-soft:#e8ecf5;
+  --text:#141a26; --muted:#5a6580; --faint:#8b95ad;
+  --accent:#3f6fe5; --accent-2:#0f9b74; --accent-3:#c0730a; --accent-4:#8a4fd0;
+  --danger:#d1344c;
+  --g-a:#0f9b74; --g-b:#c0730a; --g-c:#c2426f; --g-x:#d1344c;
+  --ring:0 0 0 3px rgba(63,111,229,.25);
+  --shadow:0 1px 2px rgba(20,26,38,.06),0 8px 24px -14px rgba(20,26,38,.28);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(1100px 520px at 12% -8%, color-mix(in srgb,var(--accent) 16%, transparent), transparent 62%),
+    radial-gradient(900px 460px at 88% -4%, color-mix(in srgb,var(--accent-4) 13%, transparent), transparent 60%),
+    linear-gradient(180deg,var(--bg-grad-a),var(--bg-grad-b) 40%,var(--bg));
+  background-attachment:fixed;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 20px 64px}
+
+header.top{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.brand{flex:1 1 auto;min-width:260px}
+h1{margin:0;font-size:26px;letter-spacing:-.02em;font-weight:700;
+   background:linear-gradient(92deg,var(--accent),var(--accent-4) 55%,var(--accent-2));
+   -webkit-background-clip:text;background-clip:text;color:transparent}
+h1 .dot{color:var(--accent-3)}
+.tagline{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+
+.card{background:color-mix(in srgb,var(--panel) 88%, transparent);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:20px;margin:16px 0;box-shadow:var(--shadow);
+  backdrop-filter:blur(8px)}
+.card > h2{margin:0 0 4px;font-size:15px;font-weight:650;letter-spacing:.01em;
+  display:flex;align-items:center;gap:8px}
+.card > h2::before{content:"";width:4px;height:16px;border-radius:3px;
+  background:linear-gradient(180deg,var(--accent),var(--accent-4))}
+.card > .hint{margin:0 0 16px;color:var(--muted);font-size:13px}
+
+label{display:block;margin:14px 0 5px;font-weight:600;font-size:13px;color:var(--muted)}
+input[type=text]{width:100%;padding:9px 11px;font-size:14px;color:var(--text);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  transition:border-color .15s,box-shadow .15s}
+input[type=text]:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+input[type=file]{width:100%;padding:11px;font-size:13.5px;color:var(--muted);
+  background:var(--panel-2);border:1px dashed var(--line);border-radius:var(--radius-sm)}
+input[type=file]:hover{border-color:var(--accent)}
+input[type=file]::file-selector-button{margin-right:11px;padding:6px 12px;font:inherit;font-size:13px;
+  color:var(--text);background:var(--panel-3);border:1px solid var(--line);
+  border-radius:7px;cursor:pointer}
+input[type=file]::file-selector-button:hover{border-color:var(--accent)}
+
+button{font:inherit;font-size:14px;font-weight:600;color:var(--text);cursor:pointer;
+  background:var(--panel-3);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:9px 16px;transition:transform .08s,border-color .15s,background .15s}
+button:hover:not(:disabled){border-color:var(--accent)}
+button:active:not(:disabled){transform:translateY(1px)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible{outline:none;box-shadow:var(--ring)}
+button.primary{color:#08101f;border:none;
+  background:linear-gradient(96deg,var(--accent),var(--accent-4));
+  box-shadow:0 6px 18px -10px color-mix(in srgb,var(--accent) 90%, transparent)}
+button.primary:hover:not(:disabled){filter:brightness(1.08)}
+button.ghost{background:transparent}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+
+.seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);
+  border-radius:10px;padding:3px;gap:3px;margin-bottom:4px}
+.seg button{background:transparent;border:none;padding:6px 14px;font-size:13px;
+  border-radius:7px;color:var(--muted)}
+.seg button[aria-selected=true]{background:var(--panel-3);color:var(--text);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.panel{display:none}
+.panel.active{display:block}
+
+.status{margin-top:14px;padding:10px 12px;border-radius:var(--radius-sm);font-size:13.5px;
+  border:1px solid var(--line);background:var(--panel-2);color:var(--muted);display:none}
+.status.show{display:block}
+.status.err{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));
+  background:color-mix(in srgb,var(--danger) 12%,var(--panel-2));color:var(--danger)}
+.status.ok{border-color:color-mix(in srgb,var(--accent-2) 45%,var(--line));
+  background:color-mix(in srgb,var(--accent-2) 10%,var(--panel-2))}
+
+.bar{height:7px;border-radius:99px;background:var(--panel-3);overflow:hidden;margin-top:10px}
+.bar > i{display:block;height:100%;width:0;border-radius:99px;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .18s ease}
+
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:14px}
+th,td{padding:6px 8px;text-align:left;vertical-align:middle;
+  border-bottom:1px solid var(--line-soft)}
+th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;
+  letter-spacing:.05em;position:sticky;top:0;background:var(--panel)}
+tbody tr:hover{background:color-mix(in srgb,var(--accent) 7%, transparent)}
+td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.tablewrap{max-height:420px;overflow:auto;border:1px solid var(--line-soft);
+  border-radius:var(--radius-sm);margin-top:12px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+  background:var(--panel-3);padding:1px 6px;border-radius:5px}
+
+.grade{display:inline-block;min-width:20px;text-align:center;font-weight:700;
+  font-size:11px;border-radius:5px;padding:1px 6px;color:#08101f}
+.g-A{background:var(--g-a)} .g-B{background:var(--g-b)}
+.g-C{background:var(--g-c)} .g-X{background:var(--g-x);color:#fff}
+.chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;
+  border:1px solid var(--line);color:var(--muted);background:var(--panel-3)}
+.chip.st{border-color:color-mix(in srgb,var(--accent-4) 55%,var(--line));
+  color:var(--accent-4)}
+.chip.hot{border-color:color-mix(in srgb,var(--accent-3) 60%,var(--line));
+  color:var(--accent-3)}
+.chip:empty{display:none}
+
+.playbtn{padding:3px 10px;font-size:12px;line-height:1.5;min-width:52px}
+.playbtn.on{border-color:var(--accent-2);color:var(--accent-2)}
+
+.preview{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;
+  padding:14px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  background:linear-gradient(180deg,var(--panel-2),transparent);margin-top:12px}
+.preview audio{width:100%;height:36px}
+.volbox{flex:1 1 260px;min-width:220px}
+input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:22px;
+  background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:99px;
+  background:linear-gradient(90deg,var(--accent-2),var(--accent),var(--accent-3))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
+  margin-top:-5.5px;border-radius:50%;background:var(--text);
+  border:3px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+input[type=range]::-moz-range-track{height:5px;border-radius:99px;background:var(--line)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+  background:var(--text);border:3px solid var(--accent)}
+input[type=range]:focus-visible{outline:none;box-shadow:var(--ring);border-radius:8px}
+.volrow{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);
+  margin-bottom:2px}
+.volrow b{color:var(--text);font-variant-numeric:tabular-nums}
+
+.peak{height:6px;border-radius:99px;background:var(--panel-3);overflow:hidden;
+  margin-top:8px;position:relative}
+.peak > i{display:block;height:100%;width:0;
+  background:linear-gradient(90deg,var(--accent-2),var(--accent-3));transition:width .1s}
+
+#mapview{white-space:pre-wrap;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--radius-sm);
+  padding:12px;margin-top:12px;max-height:340px;overflow:auto;color:var(--muted);display:none}
+#mapview.show{display:block}
+details > summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0;
+  list-style:none;user-select:none}
+details > summary::-webkit-details-marker{display:none}
+details > summary::before{content:"▸ ";color:var(--accent)}
+details[open] > summary::before{content:"▾ "}
+
+.foot{font-size:12.5px;color:var(--muted)}
+.foot a{color:var(--accent);text-decoration:none}
+.foot a:hover{text-decoration:underline}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:center}
+
+.iconbtn{padding:7px 12px;font-size:13px;background:var(--panel-2)}
+@media (max-width:640px){
+  .wrap{padding:18px 14px 48px}
+  .card{padding:16px}
+  h1{font-size:22px}
+  table{font-size:11.5px}
+  th,td{padding:5px 5px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important}
+}
 </style>
 </head>
 <body>
-<h1>tci2wav <small style="font-weight:400;color:#666">mono + stereo V1/V2/Editor &rarr; velocity WAVs</small></h1>
-<div class="card">
-<label>TCI file (.tci) — stays on your machine, decoded locally</label>
-<input type="file" id="file" accept=".tci">
-<label>Sample family (e.g. ACKick)</label>
-<input type="text" id="family" placeholder="guessed from filename">
-<label>Mic type (e.g. Z3)</label>
-<input type="text" id="mic" placeholder="guessed from filename">
-<br><button onclick="go()">Export</button>
-<div id="status"></div>
-<div id="dl"><a id="dllink" href="#"><button>Download ZIP</button></a></div>
-<div id="res"></div>
-<pre id="mapview"></pre>
-</div>
-<div class="card foot">
-Naming: <code>FAMILY_MIC_V##_RR#.wav</code> (V = velocity by attack-peak,
-RR = round robin). Grades: <span class="grade A">A</span> exact+smooth
-<span class="grade B">B</span> close <span class="grade C">C</span> verify by ear
-<span class="grade X">X</span> skipped.
-<strong>Stereo:</strong> tails decode exactly (grade <span class="grade B">B</span>), but
-the ~2&nbsp;ms attack head uses an undecoded path, so those frames are silent and
-the count is listed in MAP.txt. Method:
-<a href="https://github.com/AidanScroggins/tci2wav/blob/main/WRITEUP.md">WRITEUP.md</a>
-&middot; code: <a href="https://github.com/AidanScroggins/tci2wav">github.com/AidanScroggins/tci2wav</a>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand">
+    <h1>tci2wav<span class="dot">.</span></h1>
+    <p class="tagline">Trigger&nbsp;2 <code>.tci</code> &rarr; velocity-named WAVs. Mono and stereo, V1/V2/Editor. Everything runs in your browser — no uploads.</p>
+  </div>
+  <div class="seg" role="tablist" aria-label="Colour theme">
+    <button id="thDark" role="tab" aria-selected="true">Dark</button>
+    <button id="thLight" role="tab" aria-selected="false">Light</button>
+  </div>
+</header>
+
+<!-- ───────────────────────── single file ───────────────────────── -->
+<section class="card">
+  <h2>Single instrument</h2>
+  <p class="hint">Pick one <code>.tci</code>. Family and mic are guessed from the filename and can be overridden.</p>
+  <label for="file">TCI file (.tci)</label>
+  <input type="file" id="file" accept=".tci">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div>
+      <label for="family">Sample family (e.g. ACKick)</label>
+      <input type="text" id="family" placeholder="guessed from filename">
+    </div>
+    <div>
+      <label for="mic">Mic type (e.g. Z3, NRG)</label>
+      <input type="text" id="mic" placeholder="guessed from filename">
+    </div>
+  </div>
+  <div class="btnrow">
+    <button class="primary" id="goSingle">Convert</button>
+    <a id="dlSingle" download hidden><button class="ghost" type="button">Download ZIP</button></a>
+  </div>
+  <div class="status" id="stSingle"></div>
+</section>
+
+<!-- ───────────────────────── batch folder ───────────────────────── -->
+<section class="card">
+  <h2>Batch — whole folder</h2>
+  <p class="hint">
+    Select a library folder (or any set of files). Every <code>.tci</code> is converted in turn and
+    filed into <code>&lt;Category&gt;/&lt;Instrument&gt;/&lt;MIC&gt;/</code> inside one ZIP, matching the
+    Python CLI. Preview stays available for the instruments processed most recently.
+  </p>
+  <label for="folder">Folder or files</label>
+  <input type="file" id="folder" webkitdirectory directory multiple>
+  <div class="btnrow">
+    <button class="primary" id="goBatch">Convert folder</button>
+    <button id="cancelBatch" hidden>Cancel</button>
+    <a id="dlBatch" download hidden><button class="ghost" type="button">Download ZIP</button></a>
+    <span class="chip" id="batchPick"></span>
+  </div>
+  <div class="status" id="stBatch"></div>
+  <div class="bar" id="barBatch" hidden><i></i></div>
+  <div class="tablewrap" id="batchTable" hidden>
+    <table>
+      <thead><tr><th>File</th><th>Instrument / MIC</th><th>Waves</th><th>Stereo</th><th>State</th><th></th></tr></thead>
+      <tbody id="batchRows"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ───────────────────────── preview + results ───────────────────────── -->
+<section class="card">
+  <h2>Preview &amp; results</h2>
+  <p class="hint">Every converted wave can be auditioned here. The slider only affects preview — exported files are never modified.</p>
+
+  <div class="preview">
+    <div style="flex:2 1 340px;min-width:260px">
+      <audio id="player" controls preload="none"></audio>
+      <div class="volrow" style="margin-top:8px">
+        <span id="nowPlaying">Nothing loaded</span>
+        <span>peak <b id="peakDb">—</b></span>
+      </div>
+      <div class="peak"><i id="peakBar"></i></div>
+    </div>
+    <div class="volbox">
+      <div class="volrow"><span>Preview volume</span><b><span id="volPct">35</span>% · <span id="volDb">-9.1</span> dB</b></div>
+      <input type="range" id="vol" min="0" max="100" step="1" value="35" aria-label="Preview volume">
+      <div class="btnrow" style="margin-top:6px">
+        <button id="stopAll" class="ghost">Stop</button>
+        <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400">
+          <input type="checkbox" id="fadeIn" checked> soft start (avoids clicks)
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="tablewrap" id="resWrap" hidden>
+    <table>
+      <thead><tr><th></th><th>File</th><th>Ch</th><th>Wave</th><th>Grade</th><th>Peak</th><th>Parse</th></tr></thead>
+      <tbody id="resRows"></tbody>
+    </table>
+  </div>
+
+  <details id="mapDetails">
+    <summary>MAP.txt</summary>
+    <pre id="mapview"></pre>
+  </details>
+</section>
+
+<section class="card foot">
+  <strong>Grading.</strong>
+  <div class="legend">
+    <span><span class="grade g-A">A</span> exact &amp; smooth</span>
+    <span><span class="grade g-B">B</span> close / stereo</span>
+    <span><span class="grade g-C">C</span> verify by ear</span>
+    <span><span class="grade g-X">X</span> skipped</span>
+  </div>
+  <p style="margin:12px 0 0">
+    <strong>Naming.</strong> <code>FAMILY_MIC_V##_RR#.wav</code> — V is velocity by attack peak, RR is the
+    round robin inside a velocity group.
+  </p>
+  <p style="margin:8px 0 0">
+    <strong>Stereo.</strong> The tail decodes exactly; the ~2&nbsp;ms attack head uses a path that is not
+    cracked yet, so those frames are silent and the count is reported per file in MAP.txt.
+  </p>
+  <p style="margin:8px 0 0">
+    Method: <a href="https://github.com/AidanScroggins/tci2wav/blob/main/WRITEUP.md">WRITEUP.md</a>
+    &middot; code: <a href="https://github.com/AidanScroggins/tci2wav">github.com/AidanScroggins/tci2wav</a>
+  </p>
+</section>
+
 </div>
 <script src="decode.js"></script>
 <script src="solve.js"></script>
 <script src="stereo.js"></script>
 <script src="export.js"></script>
+<script src="zip.js"></script>
+<script src="naming.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
